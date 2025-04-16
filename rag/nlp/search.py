@@ -23,6 +23,9 @@ from rag.utils import rmSpace, get_float
 from rag.nlp import rag_tokenizer, query
 import numpy as np
 from rag.utils.doc_store_conn import DocStoreConnection, MatchDenseExpr, FusionExpr, OrderByExpr
+from rag.utils.storage_factory import STORAGE_IMPL
+from rag.settings import DOC_MAXIMUM_SIZE
+from api.db.services.document_service import DocumentService
 
 
 def index_name(uid): return f"ragflow_{uid}"
@@ -347,7 +350,9 @@ class Dealer:
     def retrieval(self, question, embd_mdl, tenant_ids, kb_ids, page, page_size, similarity_threshold=0.2,
                   vector_similarity_weight=0.3, top=1024, doc_ids=None, aggs=True,
                   rerank_mdl=None, highlight=False,
-                  rank_feature: dict | None = {PAGERANK_FLD: 10}):
+                  rank_feature: dict | None = {PAGERANK_FLD: 10},
+                  fetch_full_doc: bool = True
+                  ):
         ranks = {"total": 0, "chunks": [], "doc_aggs": {}}
         if not question:
             return ranks
@@ -385,6 +390,8 @@ class Dealer:
         sim_np = np.array(sim)
         filtered_count = (sim_np >= similarity_threshold).sum()    
         ranks["total"] = int(filtered_count) # Convert from np.int64 to Python int otherwise JSON serializable error
+        chunks_to_return = []
+        unique_doc_ids_to_fetch = set()
         for i in idx:
             if sim[i] < similarity_threshold:
                 break
@@ -397,13 +404,14 @@ class Dealer:
             dnm = chunk.get("docnm_kwd", "")
             did = chunk.get("doc_id", "")
             position_int = chunk.get("position_int", [])
+            kb_id_chunk = chunk.get("kb_id", "")
             d = {
                 "chunk_id": id,
                 "content_ltks": chunk["content_ltks"],
                 "content_with_weight": chunk["content_with_weight"],
                 "doc_id": did,
                 "docnm_kwd": dnm,
-                "kb_id": chunk["kb_id"],
+                "kb_id": kb_id_chunk,
                 "important_kwd": chunk.get("important_kwd", []),
                 "image_id": chunk.get("img_id", ""),
                 "similarity": sim[i],
@@ -417,16 +425,36 @@ class Dealer:
                     d["highlight"] = rmSpace(sres.highlight[id])
                 else:
                     d["highlight"] = d["content_with_weight"]
-            ranks["chunks"].append(d)
+            chunks_to_return.append(d)
             if dnm not in ranks["doc_aggs"]:
                 ranks["doc_aggs"][dnm] = {"doc_id": did, "count": 0}
             ranks["doc_aggs"][dnm]["count"] += 1
+            if fetch_full_doc and did and kb_id_chunk:
+                unique_doc_ids_to_fetch.add((did, kb_id_chunk))
+
         ranks["doc_aggs"] = [{"doc_name": k,
                               "doc_id": v["doc_id"],
                               "count": v["count"]} for k,
                                                        v in sorted(ranks["doc_aggs"].items(),
                                                                    key=lambda x: x[1]["count"] * -1)]
-        ranks["chunks"] = ranks["chunks"][:page_size]
+        ranks["chunks"] = chunks_to_return[:page_size]
+
+        if fetch_full_doc and unique_doc_ids_to_fetch:
+            logging.info(f"Fetching full documents for {len(unique_doc_ids_to_fetch)} unique doc_ids.")
+            full_doc_cache = {}
+            for doc_id_to_fetch, kb_id_of_doc in unique_doc_ids_to_fetch:
+                full_content = fetch_full_doc_from_storage(doc_id_to_fetch, kb_id_of_doc)
+                full_doc_cache[(doc_id_to_fetch, kb_id_of_doc)] = full_content if full_content is not None else ""
+            for chunk_dict in chunks_to_return:
+                doc_id_key = chunk_dict.get("doc_id")
+                kb_id_key = chunk_dict.get("kb_id")
+                if doc_id_key and kb_id_key:
+                    chunk_dict["full_doc_content"] = full_doc_cache.get((doc_id_key, kb_id_key), "")
+                else:
+                    chunk_dict["full_doc_content"] = ""
+        elif fetch_full_doc:
+            for chunk_dict in chunks_to_return:
+                chunk_dict["full_doc_content"] = ""
 
         return ranks
 
@@ -492,3 +520,58 @@ class Dealer:
         tag_fea = sorted([(a, round(0.1*(c + 1) / (cnt + S) / max(1e-6, all_tags.get(a, 0.0001)))) for a, c in aggs],
                          key=lambda x: x[1] * -1)[:topn_tags]
         return {a.replace(".", "_"): max(1, c) for a, c in tag_fea}
+
+def fetch_full_doc_from_storage(doc_id: str, kb_id: str) -> str | None:
+    """
+    根据文档 ID 从 MinIO (通过 STORAGE_IMPL) 获取完整的文档内容。
+
+    Args:
+        doc_id (str): 文档的唯一标识符。
+        kb_id (str): 知识库ID (虽然在此实现中可能不直接用于路径，但保留参数一致性)。
+
+    Returns:
+        str | None: 返回文档的完整文本内容（如果找到且是文本），
+                     如果找不到、发生错误或不是文本文件则返回 None。
+                     内容会被限制在 DOC_MAXIMUM_SIZE。
+    """
+    try:
+        # 1. 使用 DocumentService 获取文档的 location
+        # 注意：这里假设 DocumentService 实例可以被访问，
+        # 在实际应用中，你可能需要通过依赖注入或其他方式获取它。
+        # 为了简化，我们直接实例化，但这可能不是最佳实践。
+        # 或者，可以将 location 作为参数传递给此函数。
+        doc_meta = DocumentService.get_by_id(doc_id)
+        if not doc_meta or not doc_meta.location:
+            logging.warning(f"Could not find document metadata or location for doc_id: {doc_id}")
+            return None
+        location = doc_meta.location # location 通常是 MinIO 中的对象路径，例如 'tenant_id/kb_id/filename.pdf'
+
+        # 2. 使用 STORAGE_IMPL (RAGFlowMinio 实例) 的 get 方法获取文件内容
+        # get() 方法通常返回 bytes
+        file_content_bytes = STORAGE_IMPL.get(location)
+
+        if file_content_bytes:
+            # 3. 尝试将 bytes 解码为字符串 (假设是 UTF-8 编码的文本文件)
+            # 注意：对于非文本文件（如图片、PDF），直接解码会失败或产生乱码。
+            # RAGFlow 的流程通常会将 PDF 等转换为文本块存储，
+            # 但这里获取的是原始文件，需要考虑其类型。
+            # 如果你的 RAG 只处理文本文件，这可能没问题。
+            # 如果需要处理二进制文件，这里需要更复杂的逻辑判断文件类型。
+            try:
+                content = file_content_bytes.decode('utf-8')
+                # 4. 限制内容大小
+                if len(content) > DOC_MAXIMUM_SIZE:
+                     content = content[:DOC_MAXIMUM_SIZE] + "..." # 截断
+                return content
+            except UnicodeDecodeError:
+                logging.warning(f"Could not decode file content as UTF-8 for doc_id: {doc_id} at location: {location}. It might be a binary file.")
+                # 对于二进制文件，可以返回一个提示信息或 None
+                return f"[Binary content at {location}]" # 或者返回 None
+        else:
+            logging.warning(f"STORAGE_IMPL.get() returned empty content for doc_id: {doc_id} at location: {location}")
+            return None
+
+    except Exception as e:
+        # 捕获 DocumentService 查询或 STORAGE_IMPL.get() 可能出现的异常
+        logging.error(f"Error fetching full document content for doc_id {doc_id}: {e}")
+        return None
