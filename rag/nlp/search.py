@@ -18,14 +18,14 @@ import re
 from collections import OrderedDict
 from dataclasses import dataclass
 
+import numpy as np
+
+from rag.nlp import rag_tokenizer, query
+from rag.settings import DOC_MAXIMUM_SIZE
 from rag.settings import TAG_FLD, PAGERANK_FLD
 from rag.utils import rmSpace, get_float
-from rag.nlp import rag_tokenizer, query
-import numpy as np
 from rag.utils.doc_store_conn import DocStoreConnection, MatchDenseExpr, FusionExpr, OrderByExpr
 from rag.utils.storage_factory import STORAGE_IMPL
-from rag.settings import DOC_MAXIMUM_SIZE
-from api.db.services.document_service import DocumentService
 
 
 def index_name(uid): return f"ragflow_{uid}"
@@ -522,6 +522,7 @@ class Dealer:
         return {a.replace(".", "_"): max(1, c) for a, c in tag_fea}
 
 def fetch_full_doc_from_storage(doc_id: str, kb_id: str) -> str | None:
+    from api.db.services.document_service import DocumentService
     """
     根据文档 ID 从 MinIO (通过 STORAGE_IMPL) 获取完整的文档内容。
 
