@@ -522,7 +522,6 @@ class Dealer:
         return {a.replace(".", "_"): max(1, c) for a, c in tag_fea}
 
 def fetch_full_doc_from_storage(doc_id: str, kb_id: str) -> str | None:
-    from api.db.services.document_service import DocumentService
     """
     根据文档 ID 从 MinIO (通过 STORAGE_IMPL) 获取完整的文档内容。
 
@@ -535,44 +534,50 @@ def fetch_full_doc_from_storage(doc_id: str, kb_id: str) -> str | None:
                      如果找不到、发生错误或不是文本文件则返回 None。
                      内容会被限制在 DOC_MAXIMUM_SIZE。
     """
+    from api.db.services.document_service import DocumentService
     try:
-        # 1. 使用 DocumentService 获取文档的 location
-        # 注意：这里假设 DocumentService 实例可以被访问，
-        # 在实际应用中，你可能需要通过依赖注入或其他方式获取它。
-        # 为了简化，我们直接实例化，但这可能不是最佳实践。
-        # 或者，可以将 location 作为参数传递给此函数。
-        doc_meta = DocumentService.get_by_id(doc_id)
-        if not doc_meta or not doc_meta.location:
-            logging.warning(f"Could not find document metadata or location for doc_id: {doc_id}")
-            return None
-        location = doc_meta.location # location 通常是 MinIO 中的对象路径，例如 'tenant_id/kb_id/filename.pdf'
+        # 1. 使用 DocumentService 获取文档元组 (success, doc_object)
+        success, doc_object = DocumentService.get_by_id(doc_id) # 返回值是 (bool, Document | None)
 
-        # 2. 使用 STORAGE_IMPL (RAGFlowMinio 实例) 的 get 方法获取文件内容
-        # get() 方法通常返回 bytes
+        logging.info(f"Fetched doc_meta tuple for {doc_id}: success={success}, object_type={type(doc_object)}")
+
+        # 检查是否成功获取到对象
+        if not success or doc_object is None:
+            logging.warning(f"Could not find document object for doc_id: {doc_id} (success={success})")
+            return None
+
+        # 检查对象是否有 location 属性 (理论上 Document 实例应该有)
+        # hasattr 检查的是对象本身，而不是元组
+        if not hasattr(doc_object, 'location'):
+             logging.warning(f"Document object for doc_id: {doc_id} does not have 'location' attribute. Object type: {type(doc_object)}")
+             return None
+
+        # 从元组的第二个元素 (doc_object) 获取 location
+        location = doc_object.location
+        if not location:
+            logging.warning(f"Document object found for doc_id: {doc_id}, but location is missing or empty.")
+            return None
+
+        # 2. 使用 STORAGE_IMPL 获取文件内容
+        logging.debug(f"Attempting to fetch from storage location: {location} for doc_id: {doc_id}")
         file_content_bytes = STORAGE_IMPL.get(location)
 
         if file_content_bytes:
-            # 3. 尝试将 bytes 解码为字符串 (假设是 UTF-8 编码的文本文件)
-            # 注意：对于非文本文件（如图片、PDF），直接解码会失败或产生乱码。
-            # RAGFlow 的流程通常会将 PDF 等转换为文本块存储，
-            # 但这里获取的是原始文件，需要考虑其类型。
-            # 如果你的 RAG 只处理文本文件，这可能没问题。
-            # 如果需要处理二进制文件，这里需要更复杂的逻辑判断文件类型。
+            # 3. 尝试解码
             try:
                 content = file_content_bytes.decode('utf-8')
-                # 4. 限制内容大小
+                # 4. 限制大小
                 if len(content) > DOC_MAXIMUM_SIZE:
-                     content = content[:DOC_MAXIMUM_SIZE] + "..." # 截断
+                    logging.debug(f"Document content for {doc_id} truncated from {len(content)} bytes.")
+                    content = content[:DOC_MAXIMUM_SIZE] + "..."
                 return content
             except UnicodeDecodeError:
                 logging.warning(f"Could not decode file content as UTF-8 for doc_id: {doc_id} at location: {location}. It might be a binary file.")
-                # 对于二进制文件，可以返回一个提示信息或 None
-                return f"[Binary content at {location}]" # 或者返回 None
+                return f"[Binary content at {location}]" # 返回提示信息
         else:
             logging.warning(f"STORAGE_IMPL.get() returned empty content for doc_id: {doc_id} at location: {location}")
-            return None
+            return None # 如果获取内容为空，返回 None
 
     except Exception as e:
-        # 捕获 DocumentService 查询或 STORAGE_IMPL.get() 可能出现的异常
-        logging.error(f"Error fetching full document content for doc_id {doc_id}: {e}")
-        return None
+        logging.error(f"Error fetching full document content for doc_id {doc_id}: {type(e).__name__} - {e}", exc_info=True)
+        return None # 发生任何其他异常，返回 None
