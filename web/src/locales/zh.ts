@@ -531,6 +531,8 @@ General：实体和关系提取提示来自 GitHub - microsoft/graphrag：基于
       useKnowledgeGraphTip:
         '是否检索与所选知识库对应的知识图谱相关文本块，以处理复杂的多跳问题？这一过程将涉及对实体、关系和社区报告文本块的多次检索，会显著延长检索时间。',
       keyword: '关键词分析',
+      contextExpansionTip:'召回文本块后会使用其对应的完整文档来回答',
+      contextExpansion: '上下文扩展',
       keywordTip: `应用 LLM 分析用户的问题，提取在相关性计算中要强调的关键词。`,
       reasoning: '推理',
       reasoningTip:
