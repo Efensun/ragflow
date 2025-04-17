@@ -567,9 +567,13 @@ def fetch_full_doc_from_storage(doc_id: str, kb_id: str) -> str | None:
             try:
                 content = file_content_bytes.decode('utf-8')
                 # 4. 限制大小
+                truncated = False
                 if len(content) > DOC_MAXIMUM_SIZE:
                     logging.debug(f"Document content for {doc_id} truncated from {len(content)} bytes.")
                     content = content[:DOC_MAXIMUM_SIZE] + "..."
+                    truncated = True
+                # <--- 在这里添加成功日志
+                logging.info(f"Successfully fetched and decoded content for doc_id: {doc_id} from bucket: {bucket_name}, key: {object_key}. Length: {len(content)} (truncated: {truncated})")
                 return content
             except UnicodeDecodeError:
                 logging.warning(f"Could not decode file content as UTF-8 for doc_id: {doc_id} (bucket: {bucket_name}, key: {object_key}). It might be a binary file.")
