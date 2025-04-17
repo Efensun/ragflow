@@ -148,6 +148,15 @@ const AssistantSetting = ({
       >
         <Switch onChange={handleTtsChange} />
       </Form.Item>
+      <Form.Item
+        label={t('contextExpansion')}
+        valuePropName="checked"
+        name={['prompt_config', 'context_expansion']}
+        tooltip={t('contextExpansionTip')}
+        initialValue={false}
+      >
+        <Switch />
+      </Form.Item>
       <TavilyItem></TavilyItem>
       <KnowledgeBaseItem
         required={false}
