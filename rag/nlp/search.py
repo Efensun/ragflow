@@ -525,6 +525,7 @@ class Dealer:
 def fetch_full_doc_from_storage(doc_id: str, kb_id: str) -> str | None:
     """
     根据文档 ID 从 MinIO (通过 STORAGE_IMPL) 获取完整的文档内容。
+    假设 kb_id 是 bucket 名称，doc_object.location 是 object key。
 
     Args:
         doc_id (str): 文档的唯一标识符。
@@ -545,45 +546,36 @@ def fetch_full_doc_from_storage(doc_id: str, kb_id: str) -> str | None:
             logging.warning(f"Could not find document object for doc_id: {doc_id} (success={success})")
             return None
 
+        # 检查对象是否有 location 属性
         if not hasattr(doc_object, 'location'):
              logging.warning(f"Document object for doc_id: {doc_id} does not have 'location' attribute. Object type: {type(doc_object)}")
              return None
 
-        location = doc_object.location
-        if not location:
-            logging.warning(f"Document object found for doc_id: {doc_id}, but location is missing or empty.")
+        # location 现在被视为 object_key (文件名)
+        object_key = doc_object.location
+        if not object_key:
+            logging.warning(f"Document object found for doc_id: {doc_id}, but location (object key) is missing or empty.")
             return None
 
-        # 2. 从 location 中拆分 bucket 和 filename
-        try:
-            # 假设 location 格式为 "bucket/path/to/filename"
-            # 使用 os.path.normpath 确保路径分隔符一致性
-            normalized_location = os.path.normpath(location)
-            # 按第一个 '/' 分割
-            bucket_name, object_key = normalized_location.split(os.path.sep, 1)
-        except ValueError:
-            # 如果 location 不包含 '/'，则无法拆分
-            logging.error(f"Invalid location format for doc_id {doc_id}: '{location}'. Cannot split into bucket and filename.")
-            return None
-
-        # 3. 使用拆分后的 bucket 和 filename 调用 STORAGE_IMPL.get
+        # 2. 使用 kb_id 作为 bucket_name, object_key 作为 filename 调用 STORAGE_IMPL.get
+        bucket_name = kb_id # <--- 使用 kb_id 作为 bucket 名称
         logging.debug(f"Attempting to fetch from storage: bucket='{bucket_name}', key='{object_key}' for doc_id: {doc_id}")
-        file_content_bytes = STORAGE_IMPL.get(bucket_name, object_key)
+        file_content_bytes = STORAGE_IMPL.get(bucket_name, object_key) # <--- 传递 bucket_name 和 object_key
 
         if file_content_bytes:
-            # 4. 尝试解码
+            # 3. 尝试解码
             try:
                 content = file_content_bytes.decode('utf-8')
-                # 5. 限制大小
+                # 4. 限制大小
                 if len(content) > DOC_MAXIMUM_SIZE:
                     logging.debug(f"Document content for {doc_id} truncated from {len(content)} bytes.")
                     content = content[:DOC_MAXIMUM_SIZE] + "..."
                 return content
             except UnicodeDecodeError:
-                logging.warning(f"Could not decode file content as UTF-8 for doc_id: {doc_id} at location: {location}. It might be a binary file.")
-                return f"[Binary content at {location}]"
+                logging.warning(f"Could not decode file content as UTF-8 for doc_id: {doc_id} (bucket: {bucket_name}, key: {object_key}). It might be a binary file.")
+                return f"[Binary content in bucket {bucket_name} at key {object_key}]"
         else:
-            logging.warning(f"STORAGE_IMPL.get() returned empty content for doc_id: {doc_id} at location: {location}")
+            logging.warning(f"STORAGE_IMPL.get() returned empty content for doc_id: {doc_id} (bucket: {bucket_name}, key: {object_key})")
             return None
 
     except Exception as e:
