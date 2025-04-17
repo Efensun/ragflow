@@ -17,6 +17,7 @@ import logging
 import re
 from collections import OrderedDict
 from dataclasses import dataclass
+import os
 
 import numpy as np
 
@@ -537,47 +538,54 @@ def fetch_full_doc_from_storage(doc_id: str, kb_id: str) -> str | None:
     from api.db.services.document_service import DocumentService
     try:
         # 1. 使用 DocumentService 获取文档元组 (success, doc_object)
-        success, doc_object = DocumentService.get_by_id(doc_id) # 返回值是 (bool, Document | None)
-
+        success, doc_object = DocumentService.get_by_id(doc_id)
         logging.info(f"Fetched doc_meta tuple for {doc_id}: success={success}, object_type={type(doc_object)}")
 
-        # 检查是否成功获取到对象
         if not success or doc_object is None:
             logging.warning(f"Could not find document object for doc_id: {doc_id} (success={success})")
             return None
 
-        # 检查对象是否有 location 属性 (理论上 Document 实例应该有)
-        # hasattr 检查的是对象本身，而不是元组
         if not hasattr(doc_object, 'location'):
              logging.warning(f"Document object for doc_id: {doc_id} does not have 'location' attribute. Object type: {type(doc_object)}")
              return None
 
-        # 从元组的第二个元素 (doc_object) 获取 location
         location = doc_object.location
         if not location:
             logging.warning(f"Document object found for doc_id: {doc_id}, but location is missing or empty.")
             return None
 
-        # 2. 使用 STORAGE_IMPL 获取文件内容
-        logging.debug(f"Attempting to fetch from storage location: {location} for doc_id: {doc_id}")
-        file_content_bytes = STORAGE_IMPL.get(location)
+        # 2. 从 location 中拆分 bucket 和 filename
+        try:
+            # 假设 location 格式为 "bucket/path/to/filename"
+            # 使用 os.path.normpath 确保路径分隔符一致性
+            normalized_location = os.path.normpath(location)
+            # 按第一个 '/' 分割
+            bucket_name, object_key = normalized_location.split(os.path.sep, 1)
+        except ValueError:
+            # 如果 location 不包含 '/'，则无法拆分
+            logging.error(f"Invalid location format for doc_id {doc_id}: '{location}'. Cannot split into bucket and filename.")
+            return None
+
+        # 3. 使用拆分后的 bucket 和 filename 调用 STORAGE_IMPL.get
+        logging.debug(f"Attempting to fetch from storage: bucket='{bucket_name}', key='{object_key}' for doc_id: {doc_id}")
+        file_content_bytes = STORAGE_IMPL.get(bucket_name, object_key)
 
         if file_content_bytes:
-            # 3. 尝试解码
+            # 4. 尝试解码
             try:
                 content = file_content_bytes.decode('utf-8')
-                # 4. 限制大小
+                # 5. 限制大小
                 if len(content) > DOC_MAXIMUM_SIZE:
                     logging.debug(f"Document content for {doc_id} truncated from {len(content)} bytes.")
                     content = content[:DOC_MAXIMUM_SIZE] + "..."
                 return content
             except UnicodeDecodeError:
                 logging.warning(f"Could not decode file content as UTF-8 for doc_id: {doc_id} at location: {location}. It might be a binary file.")
-                return f"[Binary content at {location}]" # 返回提示信息
+                return f"[Binary content at {location}]"
         else:
             logging.warning(f"STORAGE_IMPL.get() returned empty content for doc_id: {doc_id} at location: {location}")
-            return None # 如果获取内容为空，返回 None
+            return None
 
     except Exception as e:
         logging.error(f"Error fetching full document content for doc_id {doc_id}: {type(e).__name__} - {e}", exc_info=True)
-        return None # 发生任何其他异常，返回 None
+        return None
