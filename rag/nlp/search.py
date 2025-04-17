@@ -352,7 +352,7 @@ class Dealer:
                   vector_similarity_weight=0.3, top=1024, doc_ids=None, aggs=True,
                   rerank_mdl=None, highlight=False,
                   rank_feature: dict | None = {PAGERANK_FLD: 10},
-                  fetch_full_doc: bool = True
+                  fetch_full_doc: bool = False
                   ):
         ranks = {"total": 0, "chunks": [], "doc_aggs": {}}
         if not question:
@@ -572,7 +572,6 @@ def fetch_full_doc_from_storage(doc_id: str, kb_id: str) -> str | None:
                     logging.debug(f"Document content for {doc_id} truncated from {len(content)} bytes.")
                     content = content[:DOC_MAXIMUM_SIZE] + "..."
                     truncated = True
-                # <--- 在这里添加成功日志
                 logging.info(f"Successfully fetched and decoded content for doc_id: {doc_id} from bucket: {bucket_name}, key: {object_key}. Length: {len(content)} (truncated: {truncated})")
                 return content
             except UnicodeDecodeError:

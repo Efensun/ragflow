@@ -43,8 +43,10 @@ def set_dialog():
     similarity_threshold = req.get("similarity_threshold", 0.1)
     vector_similarity_weight = req.get("vector_similarity_weight", 0.3)
     llm_setting = req.get("llm_setting", {})
+    prompt_config = req.get("prompt_config", {})
+
     default_prompt = {
-        "system": """你是一个智能助手，请总结知识库的内容来回答问题，请列举知识库中的数据详细回答。当所有知识库内容都与问题无关时，你的回答必须包括“知识库中未找到您要的答案！”这句话。回答需要考虑聊天历史。
+        "system": """你是一个智能助手，请总结知识库的内容来回答问题，请列举知识库中的数据详细回答。当所有知识库内容都与问题无关时，你的回答必须包括"知识库中未找到您要的答案！"这句话。回答需要考虑聊天历史。
 以下是知识库：
 {knowledge}
 以上是知识库。""",
@@ -52,17 +54,20 @@ def set_dialog():
         "parameters": [
             {"key": "knowledge", "optional": False}
         ],
-        "empty_response": "Sorry! 知识库中未找到相关内容！"
+        "empty_response": "Sorry! 知识库中未找到相关内容！",
+        "context_expansion": False,
+        "keyword": False
     }
-    prompt_config = req.get("prompt_config", default_prompt)
 
-    if not prompt_config["system"]:
-        prompt_config["system"] = default_prompt["system"]
+    final_prompt_config = {**default_prompt, **prompt_config}
 
-    for p in prompt_config["parameters"]:
+    if "context_expansion" not in final_prompt_config:
+        final_prompt_config["context_expansion"] = False
+
+    for p in final_prompt_config["parameters"]:
         if p["optional"]:
             continue
-        if prompt_config["system"].find("{%s}" % p["key"]) < 0:
+        if final_prompt_config["system"].find("{%s}" % p["key"]) < 0:
             return get_data_error_result(
                 message="Parameter '{}' is not used".format(p["key"]))
 
@@ -86,7 +91,7 @@ def set_dialog():
                 "description": description,
                 "llm_id": llm_id,
                 "llm_setting": llm_setting,
-                "prompt_config": prompt_config,
+                "prompt_config": final_prompt_config,
                 "top_n": top_n,
                 "top_k": top_k,
                 "rerank_id": rerank_id,

@@ -125,7 +125,7 @@ def chat_solo(dialog, messages, stream=True):
         yield {"answer": answer, "reference": {}, "audio_binary": tts(tts_mdl, answer), "prompt": "", "created_at": time.time()}
 
 
-def chat(dialog, messages, stream=True, **kwargs):
+def chat(dialog, messages, conv_id, stream=True, **kwargs):
     assert messages[-1]["role"] == "user", "The last content of this conversation is not from user."
     if not dialog.kb_ids:
         for ans in chat_solo(dialog, messages, stream):
@@ -223,6 +223,9 @@ def chat(dialog, messages, stream=True, **kwargs):
     thought = ""
     kbinfos = {"total": 0, "chunks": [], "doc_aggs": []}
 
+    # 从 prompt_config 中获取 context_expansion 设置
+    context_expansion = prompt_config.get("context_expansion", False)
+
     if "knowledge" not in [p["key"] for p in prompt_config["parameters"]]:
         knowledges = []
     else:
@@ -247,8 +250,8 @@ def chat(dialog, messages, stream=True, **kwargs):
                 elif stream:
                     yield think
         else:
-            kbinfos = retriever.retrieval(
-                " ".join(questions),
+            kbinfos = settings.retrievaler.retrieval(
+                questions[-1],
                 embd_mdl,
                 tenant_ids,
                 dialog.kb_ids,
@@ -256,12 +259,14 @@ def chat(dialog, messages, stream=True, **kwargs):
                 dialog.top_n,
                 dialog.similarity_threshold,
                 dialog.vector_similarity_weight,
-                doc_ids=attachments,
                 top=dialog.top_k,
-                aggs=False,
                 rerank_mdl=rerank_mdl,
-                rank_feature=label_question(" ".join(questions), kbs),
+                aggs=False,
+                rank_feature=label_question(questions[-1], kbs),
+                fetch_full_doc=context_expansion  # 使用 context_expansion 作为 fetch_full_doc 的值
             )
+            retrieval_ts = timer()
+            logging.info(f"[{conv_id}] retrieval finished: {retrieval_ts - chat_start_ts}s")
             if prompt_config.get("tavily_api_key"):
                 tav = Tavily(prompt_config["tavily_api_key"])
                 tav_res = tav.retrieve_chunks(" ".join(questions))
