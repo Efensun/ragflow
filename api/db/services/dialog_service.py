@@ -187,6 +187,7 @@ def chat(dialog, messages, conv_id, stream=True, **kwargs):
     bind_llm_ts = timer()
 
     prompt_config = dialog.prompt_config
+    logging.info(f'prompt_config: {prompt_config}')
     field_map = KnowledgebaseService.get_field_map(dialog.kb_ids)
     tts_mdl = None
     if prompt_config.get("tts"):
