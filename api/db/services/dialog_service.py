@@ -277,7 +277,7 @@ def chat(dialog, messages, conv_id, stream=True, **kwargs):
                 if ck["content_with_weight"]:
                     kbinfos["chunks"].insert(0, ck)
 
-            knowledges = kb_prompt(kbinfos, max_tokens)
+            knowledges = kb_prompt(kbinfos, max_tokens, context_expansion)
 
     logging.debug("{}->{}".format(" ".join(questions), "\n->".join(knowledges)))
 
@@ -556,7 +556,7 @@ def ask(question, kb_ids, tenant_id):
     max_tokens = chat_mdl.max_length
     tenant_ids = list(set([kb.tenant_id for kb in kbs]))
     kbinfos = retriever.retrieval(question, embd_mdl, tenant_ids, kb_ids, 1, 12, 0.1, 0.3, aggs=False, rank_feature=label_question(question, kbs))
-    knowledges = kb_prompt(kbinfos, max_tokens)
+    knowledges = kb_prompt(kbinfos, max_tokens, False)
     prompt = """
     Role: You're a smart assistant. Your name is Miss R.
     Task: Summarize the information from knowledge bases and answer user's question.

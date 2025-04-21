@@ -98,10 +98,27 @@ def message_fit_in(msg, max_length=4000):
     return max_length, msg
 
 
-def kb_prompt(kbinfos, max_tokens):
+def kb_prompt(kbinfos, max_tokens, context_expansion=False):
     from api.db.services.document_service import DocumentService
-
-    knowledges = [ck["content_with_weight"] for ck in kbinfos["chunks"]]
+    
+    # 根据context_expansion决定使用哪个字段
+    content_field = "full_doc_content" if context_expansion and kbinfos["chunks"] and "full_doc_content" in kbinfos["chunks"][0] else "content_with_weight"
+    
+    # 文档去重处理
+    processed_doc_ids = set()
+    unique_chunks = []
+    
+    for ck in kbinfos["chunks"]:
+        # 如果使用完整文档，则按文档ID去重
+        if context_expansion and content_field == "full_doc_content":
+            if ck["doc_id"] not in processed_doc_ids and ck.get(content_field):
+                processed_doc_ids.add(ck["doc_id"])
+                unique_chunks.append(ck)
+        # 如果使用文本块，则保留所有块
+        else:
+            unique_chunks.append(ck)
+    
+    knowledges = [ck.get(content_field, "") for ck in unique_chunks if ck.get(content_field)]
     used_token_count = 0
     chunks_num = 0
     for i, c in enumerate(knowledges):
@@ -112,12 +129,17 @@ def kb_prompt(kbinfos, max_tokens):
             logging.warning(f"Not all the retrieval into prompt: {i + 1}/{len(knowledges)}")
             break
 
-    docs = DocumentService.get_by_ids([ck["doc_id"] for ck in kbinfos["chunks"][:chunks_num]])
+    docs = DocumentService.get_by_ids([ck["doc_id"] for ck in unique_chunks[:chunks_num]])
     docs = {d.id: d.meta_fields for d in docs}
 
     doc2chunks = defaultdict(lambda: {"chunks": [], "meta": []})
-    for i, ck in enumerate(kbinfos["chunks"][:chunks_num]):
-        doc2chunks[ck["docnm_kwd"]]["chunks"].append((f"URL: {ck['url']}\n" if "url" in ck else "") + f"ID: {i}\n" + ck["content_with_weight"])
+    for i, ck in enumerate(unique_chunks[:chunks_num]):
+        # 使用选定的内容字段
+        content = ck.get(content_field, "")
+        if not content:
+            continue
+            
+        doc2chunks[ck["docnm_kwd"]]["chunks"].append((f"URL: {ck['url']}\n" if "url" in ck else "") + f"ID: {i}\n" + content)
         doc2chunks[ck["docnm_kwd"]]["meta"] = docs.get(ck["doc_id"], {})
 
     knowledges = []
@@ -150,7 +172,7 @@ def citation_prompt():
 Document: Elon Musk Breaks Silence on Crypto, Warns Against Dogecoin ...
 URL: https://blockworks.co/news/elon-musk-crypto-dogecoin
 ID: 0
-The Tesla co-founder advised against going all-in on dogecoin, but Elon Musk said it’s still his favorite crypto...
+The Tesla co-founder advised against going all-in on dogecoin, but Elon Musk said it's still his favorite crypto...
 
 Document: Elon Musk's Dogecoin tweet sparks social media frenzy
 ID: 1
@@ -158,7 +180,7 @@ Musk said he is 'willing to serve' D.O.G.E. – shorthand for Dogecoin.
 
 Document: Causal effect of Elon Musk tweets on Dogecoin price
 ID: 2
-If you think of Dogecoin — the cryptocurrency based on a meme — you can’t help but also think of Elon Musk...
+If you think of Dogecoin — the cryptocurrency based on a meme — you can't help but also think of Elon Musk...
 
 Document: Elon Musk's Tweet Ignites Dogecoin's Future In Public Services
 ID: 3
