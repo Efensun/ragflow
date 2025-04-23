@@ -9,6 +9,7 @@ import LayoutRecognize from '@/components/layout-recognize';
 import MaxTokenNumber from '@/components/max-token-number';
 import PageRank from '@/components/page-rank';
 import ParseConfiguration from '@/components/parse-configuration';
+import ContextRetrievalItems from '@/components/parse-configuration/context-retrieval-items';
 import GraphRagItems from '@/components/parse-configuration/graph-rag-items';
 import { Divider } from 'antd';
 import { TagItems } from '../tag-item';
@@ -38,6 +39,8 @@ export function NaiveConfiguration() {
       </DatasetConfigurationContainer>
       <Divider></Divider>
       <GraphRagItems></GraphRagItems>
+      <Divider></Divider>
+      <ContextRetrievalItems></ContextRetrievalItems>
     </section>
   );
 }
