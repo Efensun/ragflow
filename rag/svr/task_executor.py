@@ -466,6 +466,117 @@ async def run_raptor(row, chat_mdl, embd_mdl, vector_size, callback=None):
         tk_count += num_tokens_from_string(content)
     return res, tk_count
 
+async def contextual_retrieval(chunks, doc, parser_config, chat_model, progress_callback=None):
+    """为文档块添加上下文信息以提高检索质量
+    
+    Args:
+        chunks (list): 文档分块列表
+        doc (dict): 文档信息，包含doc_id, kb_id等
+        parser_config (dict): 解析配置信息
+        chat_model: 聊天模型
+        progress_callback: 进度回调函数
+    
+    Returns:
+        list: 添加了上下文信息的文档块列表
+    """
+    # 检查是否启用上下文检索
+    if not chunks or not parser_config.get("context_retrieval", {}).get("use_context_retrieval", False):
+        return chunks
+    
+    # 获取上下文检索配置
+    context_config = parser_config.get("context_retrieval", {})
+    chunk_context_prompt = context_config.get("chunk_context_prompt", "")
+    document_context_prompt = context_config.get("document_context_prompt", "")
+    
+    if not chunk_context_prompt or not document_context_prompt:
+        if progress_callback:
+            progress_callback(msg="上下文检索配置不完整，跳过上下文添加")
+        return chunks
+    
+    # 尝试获取完整文档内容
+    doc_id = doc.get("id") or chunks[0].get("doc_id", "")
+    kb_id = chunks[0].get("kb_id", "")
+    
+    if not doc_id or not kb_id:
+        if progress_callback:
+            progress_callback(msg="无法确定文档ID或知识库ID，跳过上下文添加")
+        return chunks
+    
+    # 使用fetch_full_doc_from_storage函数尝试获取完整文档
+    try:
+        from rag.nlp.search import fetch_full_doc_from_storage
+        
+        if progress_callback:
+            progress_callback(msg=f"尝试获取完整文档内容 (doc_id: {doc_id})...")
+        
+        full_doc_content = await trio.to_thread.run_sync(
+            lambda: fetch_full_doc_from_storage(doc_id, kb_id)
+        )
+        
+        # 如果无法获取文档内容，可能是二进制文件或其他问题
+        if not full_doc_content:
+            if progress_callback:
+                progress_callback(msg="无法获取完整文档内容，可能是二进制文件，跳过上下文添加")
+            return chunks
+            
+        # 成功获取文档内容，可以进行上下文添加
+        if progress_callback:
+            progress_callback(msg=f"成功获取完整文档内容，开始为{len(chunks)}个文档块添加上下文信息...")
+        
+        # 准备文档上下文prompt
+        doc_prompt = document_context_prompt.format(doc_content=full_doc_content)
+        
+        # 为每个块添加上下文
+        enhanced_chunks = []
+        for i, chunk in enumerate(chunks):
+            try:
+                # 构建完整prompt
+                prompt = doc_prompt + chunk_context_prompt.format(chunk_content=chunk["content_with_weight"])
+                
+                # 调用LLM生成上下文
+                async with chat_limiter:
+                    context = await trio.to_thread.run_sync(
+                        lambda: chat_model.chat(prompt, [{"role": "user", "content": ""}], {"temperature": 0.2})
+                    )
+                
+                if isinstance(context, tuple):
+                    context = context[0]
+                
+                # 去除可能的思考过程
+                context = re.sub(r"<think>.*</think>", "", context, flags=re.DOTALL)
+                
+                # 创建新块，添加上下文
+                new_chunk = chunk.copy()
+                new_chunk["context"] = context.strip()
+                # 将上下文添加到内容中
+                new_chunk["content_with_weight"] = f"Context: {context.strip()}\n\n{chunk['content_with_weight']}"
+                # 更新分词
+                new_chunk["content_ltks"] = rag_tokenizer.tokenize(new_chunk["content_with_weight"])
+                new_chunk["content_sm_ltks"] = rag_tokenizer.fine_grained_tokenize(new_chunk["content_ltks"])
+                
+                enhanced_chunks.append(new_chunk)
+                
+                # 更新进度
+                if progress_callback and i % 5 == 0:
+                    progress_callback(prog=0.4 + 0.3 * (i / len(chunks)), 
+                                    msg=f"已为{i+1}/{len(chunks)}个文档块添加上下文信息")
+                    
+            except Exception as e:
+                logging.exception(f"为文档块添加上下文时出错: {str(e)}")
+                # 如果处理失败，使用原始块
+                enhanced_chunks.append(chunk)
+        
+        if progress_callback:
+            progress_callback(msg=f"已完成{len(chunks)}个文档块的上下文添加")
+        
+        return enhanced_chunks
+        
+    except Exception as e:
+        logging.exception(f"获取完整文档时出错: {str(e)}")
+        if progress_callback:
+            progress_callback(msg=f"获取完整文档时出错: {str(e)}，跳过上下文添加")
+        return chunks
+
 
 async def do_handle_task(task):
     task_id = task["id"]
@@ -508,11 +619,10 @@ async def do_handle_task(task):
         raise
 
     init_kb(task, vector_size)
-
+    chat_model = LLMBundle(task_tenant_id, LLMType.CHAT, llm_name=task_llm_id, lang=task_language)
     # Either using RAPTOR or Standard chunking methods
     if task.get("task_type", "") == "raptor":
         # bind LLM for raptor
-        chat_model = LLMBundle(task_tenant_id, LLMType.CHAT, llm_name=task_llm_id, lang=task_language)
         # run RAPTOR
         chunks, token_count = await run_raptor(task, chat_model, embedding_model, vector_size, progress_callback)
     # Either using graphrag or Standard chunking methods
@@ -523,7 +633,6 @@ async def do_handle_task(task):
         if not graphrag_conf.get("use_graphrag", False):
             return
         start_ts = timer()
-        chat_model = LLMBundle(task_tenant_id, LLMType.CHAT, llm_name=task_llm_id, lang=task_language)
         with_resolution = graphrag_conf.get("resolution", False)
         with_community = graphrag_conf.get("community", False)
         await run_graphrag(task, task_language, with_resolution, with_community, chat_model, embedding_model, progress_callback)
@@ -539,6 +648,20 @@ async def do_handle_task(task):
         if not chunks:
             progress_callback(1., msg=f"No chunk built from {task_document_name}")
             return
+        
+        # 添加上下文检索处理 (如果在配置中启用)
+        if task_parser_config.get("context_retrieval", {}).get("use_context_retrieval", False):
+            start_context_ts = timer()
+            progress_callback(msg="开始尝试添加上下文信息...")
+            chunks = await contextual_retrieval(
+                chunks=chunks,
+                doc={"id": task_doc_id, "name": task_document_name},
+                parser_config=task_parser_config,
+                chat_model=chat_model,
+                progress_callback=progress_callback
+            )
+            logging.info("上下文处理: {:.2f}s".format(timer() - start_context_ts))
+        
         # TODO: exception handler
         ## set_progress(task["did"], -1, "ERROR: ")
         progress_callback(msg="Generate {} chunks".format(len(chunks)))
