@@ -366,6 +366,10 @@ export default {
       contextPrompt: '上下文提示词',
       contextPromptTip:
         '用于生成文本块上下文信息的提示词模板。系统将使用此提示词通过LLM为每个文本块生成一段简短的上下文描述。',
+      documentContextPrompt: '文档上下文部分',
+      chunkContextPrompt: '文本块上下文部分',
+      contextPromptStructureTip:
+        '上下文提示词模板由两部分组成：1)文档上下文部分用于引入整个文档内容，使用{doc_content}变量；2)文本块上下文部分用于定位当前文本块在文档中的位置，使用{chunk_content}变量。提示词保留英文格式以确保最佳效果，LLM将根据这两部分内容为每个文本块生成简洁的上下文描述，帮助提高检索质量。',
       tagSetTip: `
       <p> 请选择一个或多个标签集或标签知识库，用于对知识库中的每个文本块进行标记。</p>
       <p>对这些文本块的查询也将自动关联相应标签。 </p>
