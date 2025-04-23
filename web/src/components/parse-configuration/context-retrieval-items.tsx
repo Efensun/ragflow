@@ -69,10 +69,6 @@ const ContextRetrievalItems = ({
     }, 2000);
   };
 
-  const DEFAULT_CONTEXT_PROMPT = `${DOCUMENT_CONTEXT_PROMPT}
-
-${CHUNK_CONTEXT_PROMPT}`;
-
   return (
     <DatasetConfigurationContainer className={cn({ 'mb-4': marginBottom })}>
       <UseContextRetrievalItem></UseContextRetrievalItem>
@@ -92,85 +88,79 @@ ${CHUNK_CONTEXT_PROMPT}`;
           return (
             useContextRetrieval && (
               <>
+                <div className="mt-2 mb-4">
+                  <h4 className="text-base font-medium mb-2">
+                    {t('contextPromptStructureTip')}
+                  </h4>
+                </div>
+
                 <Form.Item
                   name={[
                     'parser_config',
                     'context_retrieval',
-                    'context_prompt',
+                    'document_context_prompt',
                   ]}
-                  label={t('contextPrompt')}
-                  tooltip={renderWideTooltip('contextPromptStructureTip')}
-                  initialValue={DEFAULT_CONTEXT_PROMPT}
+                  label={t('documentContextPrompt')}
+                  tooltip={t('documentContextPromptTip')}
+                  initialValue={DOCUMENT_CONTEXT_PROMPT}
+                  extra={
+                    <Tooltip
+                      title={
+                        documentCopied ? t('common.copied') : t('common.copy')
+                      }
+                    >
+                      <Button
+                        type="text"
+                        size="small"
+                        icon={
+                          documentCopied ? <CheckOutlined /> : <CopyOutlined />
+                        }
+                        onClick={() =>
+                          copyToClipboard(
+                            DOCUMENT_CONTEXT_PROMPT.trim(),
+                            setDocumentCopied,
+                          )
+                        }
+                      />
+                    </Tooltip>
+                  }
                 >
-                  <Input.TextArea rows={12} />
+                  <Input.TextArea rows={4} />
                 </Form.Item>
-                <div className="mt-4 mb-6">
-                  <div className="border p-3 rounded-md bg-gray-50">
-                    <h4 className="text-base font-medium mb-2">
-                      {t('contextPromptStructureTip')}
-                    </h4>
-                    <div className="mb-4">
-                      <div className="font-medium mb-1 flex justify-between items-center">
-                        <span>{t('documentContextPrompt')}:</span>
-                        <Tooltip
-                          title={
-                            documentCopied
-                              ? t('common.copied')
-                              : t('common.copy')
-                          }
-                        >
-                          <Button
-                            type="text"
-                            size="small"
-                            icon={
-                              documentCopied ? (
-                                <CheckOutlined />
-                              ) : (
-                                <CopyOutlined />
-                              )
-                            }
-                            onClick={() =>
-                              copyToClipboard(
-                                DOCUMENT_CONTEXT_PROMPT.trim(),
-                                setDocumentCopied,
-                              )
-                            }
-                          />
-                        </Tooltip>
-                      </div>
-                      <pre className="p-2 bg-white border rounded text-sm whitespace-pre-wrap">
-                        {DOCUMENT_CONTEXT_PROMPT}
-                      </pre>
-                    </div>
-                    <div>
-                      <div className="font-medium mb-1 flex justify-between items-center">
-                        <span>{t('chunkContextPrompt')}:</span>
-                        <Tooltip
-                          title={
-                            chunkCopied ? t('common.copied') : t('common.copy')
-                          }
-                        >
-                          <Button
-                            type="text"
-                            size="small"
-                            icon={
-                              chunkCopied ? <CheckOutlined /> : <CopyOutlined />
-                            }
-                            onClick={() =>
-                              copyToClipboard(
-                                CHUNK_CONTEXT_PROMPT.trim(),
-                                setChunkCopied,
-                              )
-                            }
-                          />
-                        </Tooltip>
-                      </div>
-                      <pre className="p-2 bg-white border rounded text-sm whitespace-pre-wrap">
-                        {CHUNK_CONTEXT_PROMPT}
-                      </pre>
-                    </div>
-                  </div>
-                </div>
+
+                <Form.Item
+                  name={[
+                    'parser_config',
+                    'context_retrieval',
+                    'chunk_context_prompt',
+                  ]}
+                  label={t('chunkContextPrompt')}
+                  tooltip={t('chunkContextPromptTip')}
+                  initialValue={CHUNK_CONTEXT_PROMPT}
+                  extra={
+                    <Tooltip
+                      title={
+                        chunkCopied ? t('common.copied') : t('common.copy')
+                      }
+                    >
+                      <Button
+                        type="text"
+                        size="small"
+                        icon={
+                          chunkCopied ? <CheckOutlined /> : <CopyOutlined />
+                        }
+                        onClick={() =>
+                          copyToClipboard(
+                            CHUNK_CONTEXT_PROMPT.trim(),
+                            setChunkCopied,
+                          )
+                        }
+                      />
+                    </Tooltip>
+                  }
+                >
+                  <Input.TextArea rows={8} />
+                </Form.Item>
               </>
             )
           );

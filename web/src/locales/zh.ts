@@ -367,7 +367,11 @@ export default {
       contextPromptTip:
         '用于生成文本块上下文信息的提示词模板。系统将使用此提示词通过LLM为每个文本块生成一段简短的上下文描述。',
       documentContextPrompt: '文档上下文部分',
+      documentContextPromptTip:
+        '用于引入整个文档内容的提示词部分，使用{doc_content}变量表示文档内容。',
       chunkContextPrompt: '文本块上下文部分',
+      chunkContextPromptTip:
+        '用于请求LLM为文本块生成上下文描述的提示词部分，使用{chunk_content}变量表示当前需要处理的文本块内容。',
       contextPromptStructureTip:
         '上下文提示词模板由两部分组成：1)文档上下文部分用于引入整个文档内容，使用{doc_content}变量；2)文本块上下文部分用于定位当前文本块在文档中的位置，使用{chunk_content}变量。提示词保留英文格式以确保最佳效果，LLM将根据这两部分内容为每个文本块生成简洁的上下文描述，帮助提高检索质量。',
       tagSetTip: `
