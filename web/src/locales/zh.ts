@@ -360,6 +360,12 @@ export default {
       tagTable: '表',
       tagSet: '标签集',
       topnTags: 'Top-N 标签',
+      useContextRetrieval: '使用上下文检索',
+      useContextRetrievalTip:
+        '启用上下文检索将为每个文本块生成额外的上下文信息，以改进搜索检索质量。',
+      contextPrompt: '上下文提示词',
+      contextPromptTip:
+        '用于生成文本块上下文信息的提示词模板。系统将使用此提示词通过LLM为每个文本块生成一段简短的上下文描述。',
       tagSetTip: `
       <p> 请选择一个或多个标签集或标签知识库，用于对知识库中的每个文本块进行标记。</p>
       <p>对这些文本块的查询也将自动关联相应标签。 </p>
@@ -531,7 +537,7 @@ General：实体和关系提取提示来自 GitHub - microsoft/graphrag：基于
       useKnowledgeGraphTip:
         '是否检索与所选知识库对应的知识图谱相关文本块，以处理复杂的多跳问题？这一过程将涉及对实体、关系和社区报告文本块的多次检索，会显著延长检索时间。',
       keyword: '关键词分析',
-      contextExpansionTip:'召回文本块后会使用其对应的完整文档来回答',
+      contextExpansionTip: '召回文本块后会使用其对应的完整文档来回答',
       contextExpansion: '上下文扩展',
       keywordTip: `应用 LLM 分析用户的问题，提取在相关性计算中要强调的关键词。`,
       reasoning: '推理',
