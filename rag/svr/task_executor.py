@@ -536,7 +536,7 @@ async def contextual_retrieval(chunks, doc, parser_config, chat_model, progress_
                 # 调用LLM生成上下文
                 async with chat_limiter:
                     context = await trio.to_thread.run_sync(
-                        lambda: chat_model.chat(prompt, [{"role": "user", "content": ""}], {"temperature": 0.2})
+                        lambda: chat_model.chat(prompt, [{"role": "user", "content": prompt}], {"temperature": 0.2})
                     )
                 
                 if isinstance(context, tuple):
@@ -562,7 +562,7 @@ async def contextual_retrieval(chunks, doc, parser_config, chat_model, progress_
                                     msg=f"已为{i+1}/{len(chunks)}个文档块添加上下文信息")
                     
             except Exception as e:
-                logging.exception(f"为文档块添加上下文时出错: {str(e)}")
+                logging.exception(f"为文档块添加上下文时出错使用原始分块内容: {str(e)}")
                 # 如果处理失败，使用原始块
                 enhanced_chunks.append(chunk)
         
