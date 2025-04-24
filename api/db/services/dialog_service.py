@@ -252,7 +252,7 @@ def chat(dialog, messages, conv_id, stream=True, **kwargs):
                     yield think
         else:
             kbinfos = settings.retrievaler.retrieval(
-                questions[-1],
+                " ".join(questions),
                 embd_mdl,
                 tenant_ids,
                 dialog.kb_ids,
@@ -260,9 +260,10 @@ def chat(dialog, messages, conv_id, stream=True, **kwargs):
                 dialog.top_n,
                 dialog.similarity_threshold,
                 dialog.vector_similarity_weight,
+                doc_ids=attachments,
                 top=dialog.top_k,
-                rerank_mdl=rerank_mdl,
                 aggs=False,
+                rerank_mdl=rerank_mdl,
                 rank_feature=label_question(questions[-1], kbs),
                 fetch_full_doc=context_expansion  # 使用 context_expansion 作为 fetch_full_doc 的值
             )
