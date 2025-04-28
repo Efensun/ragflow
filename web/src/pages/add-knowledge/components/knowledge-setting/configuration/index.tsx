@@ -11,6 +11,7 @@ import {
 } from '../hooks';
 import { AudioConfiguration } from './audio';
 import { BookConfiguration } from './book';
+import { CodeConfiguration } from './code';
 import { EmailConfiguration } from './email';
 import { KnowledgeGraphConfiguration } from './knowledge-graph';
 import { LawsConfiguration } from './laws';
@@ -43,6 +44,7 @@ const ConfigurationComponentMap = {
   [DocumentParserType.Email]: EmailConfiguration,
   [DocumentParserType.Tag]: TagConfiguration,
   [DocumentParserType.KnowledgeGraph]: KnowledgeGraphConfiguration,
+  [DocumentParserType.Code]: CodeConfiguration,
 };
 
 function EmptyComponent() {

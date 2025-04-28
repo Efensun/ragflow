@@ -363,6 +363,7 @@ def get_parser_config(chunk_method, parser_config):
         "knowledge_graph": {"chunk_token_num": 8192, "delimiter": "\\n!?;。；！？", "entity_types": ["organization", "person", "location", "event", "time"]},
         "email": None,
         "picture": None,
+        "code": {"chunk_token_num": 512, "delimiter": "\\n", "raptor": {"use_raptor": False}},
     }
     parser_config = key_mapping[chunk_method]
     return parser_config
