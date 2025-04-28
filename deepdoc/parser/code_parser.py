@@ -15,7 +15,7 @@ class RAGFlowCodeParser:
         # 初始化Python解析器和语言
         self.PY_LANGUAGE = Language(tspython.language())
         self.parser = Parser()
-        self.parser.set_language(self.PY_LANGUAGE)
+        self.parser = Parser(self.PY_LANGUAGE)
         self.max_chunk_size = 512
     
     def __call__(self, filename, binary=None, max_chunk_size=512, **kwargs):
@@ -58,7 +58,7 @@ class RAGFlowCodeParser:
         
         # 获取代码块
         chunks = self._extract_code_chunks(root_node, code_bytes)
-        
+        logging.info(f"code parser found {len(chunks)} chunks")
         # 如果没有找到有意义的代码块，则使用备用解析
         if not chunks:
             return self._fallback_parsing(code_text)
