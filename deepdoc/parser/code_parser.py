@@ -15,9 +15,10 @@ class RAGFlowCodeParser:
     def __init__(self):
         # 初始化Python解析器和语言
         self.PY_LANGUAGE = Language(tspython.language())
-        self.parser = Parser()
+        # 在新版API中直接通过构造函数设置语言
         self.parser = Parser(self.PY_LANGUAGE)
         self.max_chunk_size = 512
+        self.min_chunk_size = 100  # 最小块大小，小于此值的块将被合并
         
         # 定义节点类型到处理函数的映射
         self.node_type_handlers = {
@@ -94,6 +95,9 @@ class RAGFlowCodeParser:
         # 从生成器获取所有代码块
         chunks = list(self._get_smart_collapsed_chunks(root_node, code_bytes, file_path))
         
+        # 合并小块
+        chunks = self._merge_small_chunks(chunks)
+        
         # 如果导入语句块存在，将其添加到结果前面
         if import_chunks:
             chunks = import_chunks + chunks
@@ -105,6 +109,73 @@ class RAGFlowCodeParser:
             return self._fallback_parsing(code_text)
         
         return chunks
+    
+    def _merge_small_chunks(self, chunks: List[List[Any]], min_chunk_size: int = None) -> List[List[Any]]:
+        """合并过小的代码块
+        
+        Args:
+            chunks: 代码块列表
+            min_chunk_size: 最小块大小(token数)，如果为None则使用self.min_chunk_size
+            
+        Returns:
+            合并后的代码块列表
+        """
+        if not chunks:
+            return []
+        
+        if min_chunk_size is None:
+            min_chunk_size = self.min_chunk_size
+        
+        # 候选合并块
+        result = []
+        current_chunk = None
+        current_tokens = 0
+        current_path = ""
+        
+        for chunk_text, path in chunks:
+            # 计算当前块大小
+            chunk_tokens = num_tokens_from_string(chunk_text)
+            
+            # 如果当前块足够大，直接添加
+            if chunk_tokens >= min_chunk_size:
+                # 如果有累积的小块，先添加它
+                if current_chunk:
+                    result.append([current_chunk, current_path])
+                    current_chunk = None
+                    current_tokens = 0
+                
+                result.append([chunk_text, path])
+                continue
+                
+            # 处理小块
+            if not current_chunk:
+                # 开始新的累积块
+                current_chunk = chunk_text
+                current_tokens = chunk_tokens
+                current_path = path
+            elif current_tokens + chunk_tokens <= self.max_chunk_size:
+                # 可以合并到当前累积块
+                # 添加分隔符
+                if current_path == path:
+                    separator = "\n\n"
+                else:
+                    separator = f"\n\n# Path: {path}\n"
+                    
+                current_chunk += separator + chunk_text
+                current_tokens += chunk_tokens + num_tokens_from_string(separator)
+                # 保持路径不变或合并路径
+            else:
+                # 当前累积块已满，添加到结果并开始新块
+                result.append([current_chunk, current_path])
+                current_chunk = chunk_text
+                current_tokens = chunk_tokens
+                current_path = path
+        
+        # 添加最后的累积块
+        if current_chunk:
+            result.append([current_chunk, current_path])
+        
+        return result
     
     def _extract_imports(self, node, code_bytes: bytes, file_path: str) -> List[List[Any]]:
         """Extract import statements as a separate chunk
@@ -133,6 +204,113 @@ class RAGFlowCodeParser:
             return [[import_block, f"{file_path}:imports"]]
         
         return []
+    
+    def _collapse_children(self, node, code_bytes: bytes, block_types: List[str], collapse_types: List[str], 
+                         collapse_block_types: List[str], max_chunk_size: int) -> str:
+        """折叠节点的子节点，保持整体结构但减小大小
+        
+        Args:
+            node: 父节点
+            code_bytes: 完整代码字节
+            block_types: 表示块体的节点类型列表(如 'block', 'class_body')
+            collapse_types: 需要折叠的子节点类型列表(如 'function_definition')
+            collapse_block_types: 在折叠节点中需要替换的块类型(如 'block')
+            max_chunk_size: 最大块大小
+            
+        Returns:
+            折叠后的代码文本
+        """
+        # 提取节点的完整代码
+        code = code_bytes[node.start_byte:node.end_byte].decode()
+        
+        # 查找表示块体的节点
+        block_node = None
+        for child in node.children:
+            if child.type in block_types:
+                block_node = child
+                break
+        
+        if not block_node:
+            return code
+        
+        # 收集需要折叠的子节点
+        collapsed_children = []
+        children_to_collapse = []
+        
+        for child in block_node.children:
+            if child.type in collapse_types:
+                children_to_collapse.append(child)
+        
+        # 为需要折叠的节点创建折叠版本
+        for child in reversed(children_to_collapse):
+            # 查找子节点中的块节点
+            grand_child = None
+            for gc in child.children:
+                if gc.type in collapse_block_types:
+                    grand_child = gc
+                    break
+            
+            if grand_child:
+                # 提取块之前的代码
+                prefix = code_bytes[child.start_byte:grand_child.start_byte].decode()
+                # 清理前缀中可能的问题字符
+                if prefix.startswith('d '):
+                    prefix = prefix[2:]
+                # 创建折叠的子节点
+                replacement = self.collapsed_replacement(grand_child.type)
+                collapsed_child = prefix + replacement
+                # 收集折叠后的代码
+                collapsed_children.insert(0, (child, collapsed_child, grand_child))
+        
+        # 应用折叠：先创建完整的折叠版本
+        folded_code = code
+        for child, collapsed_text, grand_child in collapsed_children:
+            # 计算原始块的范围
+            start = grand_child.start_byte - node.start_byte
+            end = grand_child.end_byte - node.start_byte
+            
+            if start >= 0 and end <= len(folded_code.encode()):
+                # 替换原始块为折叠版本
+                folded_bytes = folded_code.encode()
+                prefix = folded_bytes[:start].decode()
+                suffix = folded_bytes[end:].decode()
+                replacement_text = self.collapsed_replacement(grand_child.type)
+                folded_code = prefix + replacement_text + suffix
+        
+        # 检查是否仍然太大，如果是，移除一些子节点
+        removed_child = False
+        while num_tokens_from_string(folded_code) > max_chunk_size and collapsed_children:
+            removed_child = True
+            # 从末尾开始移除子节点
+            child, collapsed_text, _ = collapsed_children.pop()
+            # 在代码中查找并移除该子节点的代码
+            child_start = child.start_byte - node.start_byte
+            child_end = child.end_byte - node.start_byte
+            
+            if child_start >= 0 and child_end <= len(folded_code.encode()):
+                folded_bytes = folded_code.encode()
+                prefix = folded_bytes[:child_start].decode()
+                suffix = folded_bytes[child_end:].decode()
+                folded_code = prefix + suffix
+        
+        # 如果移除了子节点，清理多余的空行
+        if removed_child:
+            lines = folded_code.split('\n')
+            cleaned_lines = []
+            prev_empty = False
+            
+            for line in lines:
+                if line.strip() == '':
+                    if not prev_empty:
+                        cleaned_lines.append(line)
+                    prev_empty = True
+                else:
+                    cleaned_lines.append(line)
+                    prev_empty = False
+            
+            folded_code = '\n'.join(cleaned_lines)
+        
+        return folded_code
     
     def _get_smart_collapsed_chunks(self, node, code_bytes: bytes, file_path: str, path: str = "") -> Generator[List[Any], None, None]:
         """Get code chunks with smart collapsing
@@ -244,8 +422,21 @@ class RAGFlowCodeParser:
         if num_tokens_from_string(chunk_text) <= self.max_chunk_size:
             return [chunk_text, path if path else file_path]
         
-        # 否则折叠函数体
-        return [self._collapse_function(node, code_bytes), path if path else file_path]
+        # 否则使用智能折叠算法
+        collapsed = self._collapse_children(
+            node,
+            code_bytes,
+            ['block'],  # 函数体节点类型
+            [],  # 函数内部没有需要特别折叠的子节点
+            ['block'],  # 要替换的块类型
+            self.max_chunk_size
+        )
+        
+        # 如果折叠后的代码仍然过大，使用更简单的折叠
+        if num_tokens_from_string(collapsed) > self.max_chunk_size:
+            collapsed = self._collapse_function(node, code_bytes)
+        
+        return [collapsed, path if path else file_path]
     
     def _handle_class_definition(self, node, code_bytes: bytes, file_path: str, path: str) -> List[Any]:
         """Handle class definition node
@@ -265,8 +456,21 @@ class RAGFlowCodeParser:
         if num_tokens_from_string(chunk_text) <= self.max_chunk_size:
             return [chunk_text, path if path else file_path]
         
-        # 否则折叠类体
-        return [self._collapse_class(node, code_bytes), path if path else file_path]
+        # 否则使用智能折叠算法
+        collapsed = self._collapse_children(
+            node,
+            code_bytes,
+            ['block'],  # 类体节点类型
+            ['function_definition'],  # 要折叠的子节点类型(方法)
+            ['block'],  # 要替换的块类型
+            self.max_chunk_size
+        )
+        
+        # 如果折叠后的代码仍然过大，使用更简单的折叠
+        if num_tokens_from_string(collapsed) > self.max_chunk_size:
+            collapsed = self._collapse_class(node, code_bytes)
+        
+        return [collapsed, path if path else file_path]
     
     def _handle_import_statement(self, node, code_bytes: bytes, file_path: str, path: str) -> Optional[List[Any]]:
         """Handle import statement node
@@ -450,6 +654,9 @@ class RAGFlowCodeParser:
         
         # 清理空行
         chunks = self._clean_empty_lines(chunks)
+        
+        # 合并小块
+        chunks = self._merge_small_chunks(chunks)
         
         return chunks
     
