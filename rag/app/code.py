@@ -86,7 +86,22 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
 
     # 否则标记化生成嵌入向量
     is_english = lang.lower() == "english"
-    result = tokenize_chunks(sections, doc, is_english)
+    # 这里进行修改：确保sections符合tokenize_chunks预期的格式
+    # CodeParser返回的是[chunk_text, path]的列表，需要转换为字符串列表
+    modified_sections = []
+    for section in sections:
+        if isinstance(section, list) and len(section) == 2:
+            # 如果section是[text, path]格式，就将text和path合并
+            text, path = section
+            if path:
+                modified_sections.append(f"{text} // Path: {path}")
+            else:
+                modified_sections.append(text)
+        else:
+            # 其他情况保持原样
+            modified_sections.append(section)
+
+    result = tokenize_chunks(modified_sections, doc, is_english)
 
     callback(1.0, "Tokenization completed.")
     return result
