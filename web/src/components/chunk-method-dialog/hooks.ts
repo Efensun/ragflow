@@ -68,6 +68,32 @@ const ParserListMap = new Map([
   [['md'], ['naive', 'qa', 'knowledge_graph']],
   [['json'], ['naive', 'knowledge_graph']],
   [['eml'], ['email']],
+  [
+    [
+      'py',
+      'pyx',
+      'pyi',
+      'pyw',
+      'js',
+      'ts',
+      'jsx',
+      'tsx',
+      'java',
+      'c',
+      'cpp',
+      'h',
+      'hpp',
+      'cs',
+      'go',
+      'rb',
+      'php',
+      'swift',
+      'kt',
+      'sql',
+      'sh',
+    ],
+    ['code', 'naive'],
+  ],
 ]);
 
 const getParserList = (
@@ -100,7 +126,7 @@ export const useFetchParserListOnMount = (
     }
 
     return getParserList(
-      ['naive', 'resume', 'book', 'laws', 'one', 'qa', 'table'],
+      ['naive', 'resume', 'book', 'laws', 'one', 'qa', 'table', 'code'],
       parserList,
     );
   }, [parserList, documentExtension]);
