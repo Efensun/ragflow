@@ -28,6 +28,7 @@ import RenameModal from './rename-modal';
 import WebCrawlModal from './web-crawl-modal';
 
 import FileUploadModal from '@/components/file-upload-modal';
+import { DocumentParserType } from '@/constants/knowledge';
 import { IDocumentInfo } from '@/interfaces/database/document';
 import { formatDate } from '@/utils/date';
 import styles from './index.less';
@@ -213,7 +214,7 @@ const KnowledgeFile = () => {
       />
       <ChunkMethodModal
         documentId={currentRecord.id}
-        parserId={currentRecord.parser_id}
+        parserId={currentRecord.parser_id as DocumentParserType}
         parserConfig={currentRecord.parser_config}
         documentExtension={getExtension(currentRecord.name)}
         onOk={onChangeParserOk}

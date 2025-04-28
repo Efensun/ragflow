@@ -1,3 +1,4 @@
+import { DocumentParserType } from '@/constants/knowledge';
 import { useSetModalState } from '@/hooks/common-hooks';
 import {
   useCreateNextDocument,
@@ -101,9 +102,12 @@ export const useChangeDocumentParser = (documentId: string) => {
   } = useSetModalState();
 
   const onChangeParserOk = useCallback(
-    async (parserId: string, parserConfig: IChangeParserConfigRequestBody) => {
+    async (
+      parserId: DocumentParserType | undefined,
+      parserConfig: IChangeParserConfigRequestBody,
+    ) => {
       const ret = await setDocumentParser({
-        parserId,
+        parserId: parserId as string,
         documentId,
         parserConfig,
       });

@@ -84,6 +84,32 @@ const ParserListMap = new Map([
   ],
   [['json'], [DocumentParserType.Naive, DocumentParserType.KnowledgeGraph]],
   [['eml'], [DocumentParserType.Email]],
+  [
+    [
+      'py',
+      'pyx',
+      'pyi',
+      'pyw',
+      'js',
+      'ts',
+      'jsx',
+      'tsx',
+      'java',
+      'c',
+      'cpp',
+      'h',
+      'hpp',
+      'cs',
+      'go',
+      'rb',
+      'php',
+      'swift',
+      'kt',
+      'sql',
+      'sh',
+    ],
+    [DocumentParserType.Code, DocumentParserType.Naive],
+  ],
 ]);
 
 const getParserList = (

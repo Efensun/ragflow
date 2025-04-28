@@ -79,5 +79,6 @@ export enum DocumentParserType {
   Audio = 'audio',
   Email = 'email',
   Tag = 'tag',
+  Code = 'code',
   KnowledgeGraph = 'knowledge_graph',
 }
