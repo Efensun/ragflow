@@ -126,63 +126,179 @@ class RAGFlowCodeParser:
         if min_chunk_size is None:
             min_chunk_size = self.min_chunk_size
         
-        # 候选合并块
+        # 第一步：去除重复和重叠的代码块
+        chunk_hashes = {}
+        unique_chunks = []
+        
+        # 去重处理
+        for i, (chunk_text, path) in enumerate(chunks):
+            # 计算chunk的哈希值(基于内容)
+            content_hash = hash(chunk_text.strip())
+            
+            if content_hash in chunk_hashes:
+                # 如果是完全重复内容，与现有块比较
+                existing_idx = chunk_hashes[content_hash]
+                existing_text, existing_path = chunks[existing_idx]
+                
+                # 如果现有块较短或路径信息较少，用当前较完整的替换
+                if len(chunk_text) > len(existing_text) or (len(path.split('.')) > len(existing_path.split('.'))):
+                    unique_chunks[chunk_hashes[content_hash]] = [chunk_text, path]
+                continue
+            
+            # 检查是否是其他块的子集或存在内容重叠
+            is_subset = False
+            for j, (other_text, other_path) in enumerate(unique_chunks):
+                # 检查内容重叠超过70%视为重复
+                overlap_ratio = self._calculate_overlap(chunk_text, other_text)
+                if overlap_ratio > 0.7:
+                    is_subset = True
+                    # 可能需要合并两个重叠块
+                    if path != other_path and '.' in path and '.' in other_path:
+                        # 如果是同一类的不同方法，选择路径更完整的版本
+                        if path.split('.')[0] == other_path.split('.')[0]:
+                            if len(path.split('.')) > len(other_path.split('.')):
+                                unique_chunks[j] = [chunk_text, path]
+                    break
+            
+            if not is_subset:
+                unique_chunks.append([chunk_text, path])
+                chunk_hashes[content_hash] = len(unique_chunks) - 1
+        
+        # 第二步：识别类定义块和方法块，优先保持它们的连续性
+        class_blocks = {}  # 类名 -> (块索引, 类定义)
+        method_blocks = {}  # 类名 -> [方法块索引列表]
+        special_methods = {}  # 类名 -> {特殊方法名: 索引}
+        
+        for i, (chunk_text, path) in enumerate(unique_chunks):
+            # 检测类定义块
+            if chunk_text.strip().startswith('class ') and ':' in chunk_text.split('\n')[0]:
+                # 提取类名
+                first_line = chunk_text.split('\n')[0]
+                class_name = first_line.split('class ')[1].split('(')[0].split(':')[0].strip()
+                class_blocks[class_name] = (i, first_line)
+                
+                # 如果路径中已有类名，使用路径中的类名（更准确）
+                if '.' in path:
+                    path_class = path.split('.')[-1]
+                    if path_class != class_name:
+                        class_blocks[path_class] = (i, first_line)
+            
+            # 检测方法块
+            elif '.' in path:
+                parts = path.split('.')
+                method_name = parts[-1]
+                
+                # 确定类名
+                if len(parts) > 1:
+                    class_name = parts[-2]  # 直接父级为类名
+                else:
+                    class_name = parts[0]   # 单级路径时整个就是类名
+                
+                # 初始化集合
+                if class_name not in method_blocks:
+                    method_blocks[class_name] = []
+                    special_methods[class_name] = {}
+                
+                method_blocks[class_name].append(i)
+                
+                # 标记特殊方法（如__init__）
+                if method_name.startswith('__') and method_name.endswith('__'):
+                    special_methods[class_name][method_name] = i
+        
+        # 第三步：智能合并处理
         result = []
+        processed = set()  # 跟踪已处理的块
         current_chunk = None
         current_tokens = 0
         current_path = ""
         
-        # 预处理：识别类定义块和它们的方法块，优先保持它们的连续性
-        class_blocks = {}  # 类名 -> (类块索引, 开始行)
-        method_blocks = {}  # 类名 -> [方法块索引]
-        
-        for i, (chunk_text, path) in enumerate(chunks):
-            # 检测类定义块
-            if chunk_text.strip().startswith('class ') and ':' in chunk_text.split('\n')[0]:
-                class_name = path.split('.')[-1] if '.' in path else path
-                class_blocks[class_name] = (i, chunk_text.split('\n')[0])
-            # 检测方法块
-            elif '.' in path:
-                class_name = path.split('.')[-2] if path.count('.') > 1 else path.split('.')[0]
-                if class_name not in method_blocks:
-                    method_blocks[class_name] = []
-                method_blocks[class_name].append(i)
-        
-        # 处理所有块
-        i = 0
-        while i < len(chunks):
-            chunk_text, path = chunks[i]
-            chunk_tokens = num_tokens_from_string(chunk_text)
+        # 优先处理类及其方法
+        for class_name, (class_idx, _) in class_blocks.items():
+            if class_idx in processed:
+                continue
             
-            # 特殊处理：如果是类定义块且有对应的方法块，尝试合并
-            class_name = path.split('.')[-1] if '.' in path else path
-            if class_name in class_blocks and class_blocks[class_name][0] == i and class_name in method_blocks:
-                # 尝试合并类和它的方法
-                merged_chunk = chunk_text
-                merged_tokens = chunk_tokens
-                merged_indices = [i]
+            if class_name in method_blocks:
+                # 尝试合并类和它的方法，优先处理特殊方法
+                class_text, class_path = unique_chunks[class_idx]
+                merged_chunk = class_text
+                merged_tokens = num_tokens_from_string(class_text)
+                merged_indices = [class_idx]
                 
-                for method_idx in sorted(method_blocks[class_name]):
-                    if method_idx > i:  # 只考虑当前块之后的方法块
-                        method_text, method_path = chunks[method_idx]
+                # 优先处理__init__等特殊方法
+                if class_name in special_methods:
+                    for method_name, method_idx in special_methods[class_name].items():
+                        if method_idx not in processed and method_idx != class_idx:
+                            method_text, method_path = unique_chunks[method_idx]
+                            method_tokens = num_tokens_from_string(method_text)
+                            
+                            # 对__init__方法给予更宽松的大小限制
+                            size_limit = self.max_chunk_size
+                            if method_name == '__init__':
+                                size_limit = int(self.max_chunk_size * 1.1)  # 允许超出10%
+                            
+                            separator = "\n\n"
+                            if merged_tokens + method_tokens + num_tokens_from_string(separator) <= size_limit:
+                                merged_chunk += separator + method_text
+                                merged_tokens += method_tokens + num_tokens_from_string(separator)
+                                merged_indices.append(method_idx)
+                
+                # 处理其他普通方法
+                for method_idx in method_blocks[class_name]:
+                    if method_idx not in processed and method_idx not in merged_indices:
+                        method_text, method_path = unique_chunks[method_idx]
                         method_tokens = num_tokens_from_string(method_text)
                         
-                        # 检查合并后是否超过大小限制
-                        separator = "\n\n" if path == method_path else "\n"
-                        if merged_tokens + method_tokens + num_tokens_from_string(separator) <= self.max_chunk_size:
+                        # 尝试智能合并，避免只添加极小的片段
+                        if method_tokens < self.min_chunk_size * 0.5:
+                            # 对于非常小的方法，即使合并后稍微超过限制也可以接受
+                            separator = "\n\n"
+                            size_limit = int(self.max_chunk_size * 1.05)  # 允许超出5%
+                        else:
+                            separator = "\n\n"
+                            size_limit = self.max_chunk_size
+                        
+                        if merged_tokens + method_tokens + num_tokens_from_string(separator) <= size_limit:
                             merged_chunk += separator + method_text
                             merged_tokens += method_tokens + num_tokens_from_string(separator)
                             merged_indices.append(method_idx)
-                        else:
-                            break
+                        elif "def " in method_text:
+                            # 如果无法完整添加方法，尝试只添加方法签名
+                            method_lines = method_text.split("\n")
+                            method_sig = None
+                            
+                            # 查找方法签名行
+                            for line in method_lines:
+                                if "def " in line and ":" in line:
+                                    method_sig = line + "\n    ..."
+                                    break
+                            
+                            if method_sig:
+                                sig_tokens = num_tokens_from_string(method_sig)
+                                if merged_tokens + sig_tokens + num_tokens_from_string(separator) <= self.max_chunk_size:
+                                    merged_chunk += separator + method_sig
+                                    merged_tokens += sig_tokens + num_tokens_from_string(separator)
+                                    # 注意：不标记为已处理，因为只用了方法签名
                 
-                # 如果成功合并了方法，添加合并后的块并跳过已处理的索引
+                # 如果合并了多个块，添加到结果
                 if len(merged_indices) > 1:
-                    result.append([merged_chunk, path])
-                    i = max(merged_indices) + 1
+                    result.append([merged_chunk, class_path])
+                    processed.update(merged_indices)
                     continue
+                elif len(merged_indices) == 1:
+                    # 即使只有类定义本身，也标记为已处理
+                    processed.add(class_idx)
+        
+        # 处理剩余的小块（相同代码）
+        i = 0
+        while i < len(unique_chunks):
+            if i in processed:
+                i += 1
+                continue
             
-            # 正常处理逻辑
+            chunk_text, path = unique_chunks[i]
+            chunk_tokens = num_tokens_from_string(chunk_text)
+            
+            # 如果当前块足够大，直接添加
             if chunk_tokens >= min_chunk_size:
                 # 如果有累积的小块，先添加它
                 if current_chunk:
@@ -198,17 +314,20 @@ class RAGFlowCodeParser:
                     current_chunk = chunk_text
                     current_tokens = chunk_tokens
                     current_path = path
-                elif current_tokens + chunk_tokens <= self.max_chunk_size:
+                elif current_tokens + chunk_tokens + 2 <= self.max_chunk_size:  # +2 for newline
                     # 可以合并到当前累积块
-                    # 添加分隔符，避免使用 # Path: 注释，它可能导致代码结构被破坏
+                    # 添加分隔符，避免使用会破坏代码结构的注释
                     if current_path == path:
                         separator = "\n\n"
                     else:
-                        # 如果路径看起来是类.方法结构，使用更智能的分隔
-                        if '.' in current_path and '.' in path and current_path.split('.')[0] == path.split('.')[0]:
-                            separator = "\n\n"
+                        # 智能分隔：同一类的不同部分用换行，不同类用Path注释
+                        if '.' in current_path and '.' in path:
+                            if current_path.split('.')[0] == path.split('.')[0]:
+                                separator = "\n\n"
+                            else:
+                                separator = f"\n\n# Path: {path}\n"
                         else:
-                            separator = "\n\n# Path: " + path + "\n"
+                            separator = f"\n\n# Path: {path}\n"
                     
                     current_chunk += separator + chunk_text
                     current_tokens += chunk_tokens + num_tokens_from_string(separator)
@@ -219,6 +338,7 @@ class RAGFlowCodeParser:
                     current_tokens = chunk_tokens
                     current_path = path
             
+            processed.add(i)
             i += 1
         
         # 添加最后的累积块
@@ -226,6 +346,46 @@ class RAGFlowCodeParser:
             result.append([current_chunk, current_path])
         
         return result
+    
+    def _calculate_overlap(self, text1: str, text2: str) -> float:
+        """计算两段文本的重叠比例
+        
+        Args:
+            text1: 第一段文本
+            text2: 第二段文本
+            
+        Returns:
+            重叠比例，0~1之间的浮点数
+        """
+        # 简单计算更短文本是否包含在更长文本中
+        if len(text1) <= len(text2):
+            shorter, longer = text1, text2
+        else:
+            shorter, longer = text2, text1
+        
+        # 去除可能的空白和注释差异
+        shorter = re.sub(r'#.*$', '', shorter, flags=re.MULTILINE).strip()
+        longer = re.sub(r'#.*$', '', longer, flags=re.MULTILINE).strip()
+        
+        # 如果短文本完全包含在长文本中
+        if shorter in longer:
+            return len(shorter) / len(longer)
+        
+        # 否则计算行级别的重叠
+        shorter_lines = shorter.split('\n')
+        longer_lines = longer.split('\n')
+        
+        # 计算共同行数
+        common_lines = 0
+        for line in shorter_lines:
+            line = line.strip()
+            if not line:
+                continue
+            if any(line in l for l in longer_lines):
+                common_lines += 1
+        
+        # 返回重叠比例
+        return common_lines / len(shorter_lines) if shorter_lines else 0
     
     def _extract_imports(self, node, code_bytes: bytes, file_path: str) -> List[List[Any]]:
         """Extract import statements as a separate chunk
