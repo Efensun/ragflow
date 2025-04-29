@@ -148,17 +148,26 @@ class RAGFlowCodeParser:
             # 检查是否是其他块的子集或存在内容重叠
             is_subset = False
             for j, (other_text, other_path) in enumerate(unique_chunks):
+                # 跳过空文本
+                if not chunk_text.strip() or not other_text.strip():
+                    continue
+                
                 # 检查内容重叠超过70%视为重复
-                overlap_ratio = self._calculate_overlap(chunk_text, other_text)
-                if overlap_ratio > 0.7:
-                    is_subset = True
-                    # 可能需要合并两个重叠块
-                    if path != other_path and '.' in path and '.' in other_path:
-                        # 如果是同一类的不同方法，选择路径更完整的版本
-                        if path.split('.')[0] == other_path.split('.')[0]:
-                            if len(path.split('.')) > len(other_path.split('.')):
-                                unique_chunks[j] = [chunk_text, path]
-                    break
+                try:
+                    overlap_ratio = self._calculate_overlap(chunk_text, other_text)
+                    if overlap_ratio > 0.7:
+                        is_subset = True
+                        # 可能需要合并两个重叠块
+                        if path != other_path and '.' in path and '.' in other_path:
+                            # 如果是同一类的不同方法，选择路径更完整的版本
+                            if path.split('.')[0] == other_path.split('.')[0]:
+                                if len(path.split('.')) > len(other_path.split('.')):
+                                    unique_chunks[j] = [chunk_text, path]
+                        break
+                except Exception as e:
+                    # 出错时记录日志并继续，避免整个处理中断
+                    logging.warning(f"Error calculating overlap: {e}")
+                    continue
             
             if not is_subset:
                 unique_chunks.append([chunk_text, path])
@@ -367,6 +376,10 @@ class RAGFlowCodeParser:
         shorter = re.sub(r'#.*$', '', shorter, flags=re.MULTILINE).strip()
         longer = re.sub(r'#.*$', '', longer, flags=re.MULTILINE).strip()
         
+        # 防止除零错误 - 如果任何一个文本为空，则返回0
+        if not shorter or not longer:
+            return 0.0
+        
         # 如果短文本完全包含在长文本中
         if shorter in longer:
             return len(shorter) / len(longer)
@@ -374,6 +387,10 @@ class RAGFlowCodeParser:
         # 否则计算行级别的重叠
         shorter_lines = shorter.split('\n')
         longer_lines = longer.split('\n')
+        
+        # 再次检查防止除零
+        if not shorter_lines:
+            return 0.0
         
         # 计算共同行数
         common_lines = 0
@@ -385,7 +402,7 @@ class RAGFlowCodeParser:
                 common_lines += 1
         
         # 返回重叠比例
-        return common_lines / len(shorter_lines) if shorter_lines else 0
+        return common_lines / len(shorter_lines) if shorter_lines else 0.0
     
     def _extract_imports(self, node, code_bytes: bytes, file_path: str) -> List[List[Any]]:
         """Extract import statements as a separate chunk
