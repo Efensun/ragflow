@@ -132,11 +132,57 @@ class RAGFlowCodeParser:
         current_tokens = 0
         current_path = ""
         
-        for chunk_text, path in chunks:
-            # 计算当前块大小
+        # 预处理：识别类定义块和它们的方法块，优先保持它们的连续性
+        class_blocks = {}  # 类名 -> (类块索引, 开始行)
+        method_blocks = {}  # 类名 -> [方法块索引]
+        
+        for i, (chunk_text, path) in enumerate(chunks):
+            # 检测类定义块
+            if chunk_text.strip().startswith('class ') and ':' in chunk_text.split('\n')[0]:
+                class_name = path.split('.')[-1] if '.' in path else path
+                class_blocks[class_name] = (i, chunk_text.split('\n')[0])
+            # 检测方法块
+            elif '.' in path:
+                class_name = path.split('.')[-2] if path.count('.') > 1 else path.split('.')[0]
+                if class_name not in method_blocks:
+                    method_blocks[class_name] = []
+                method_blocks[class_name].append(i)
+        
+        # 处理所有块
+        i = 0
+        while i < len(chunks):
+            chunk_text, path = chunks[i]
             chunk_tokens = num_tokens_from_string(chunk_text)
             
-            # 如果当前块足够大，直接添加
+            # 特殊处理：如果是类定义块且有对应的方法块，尝试合并
+            class_name = path.split('.')[-1] if '.' in path else path
+            if class_name in class_blocks and class_blocks[class_name][0] == i and class_name in method_blocks:
+                # 尝试合并类和它的方法
+                merged_chunk = chunk_text
+                merged_tokens = chunk_tokens
+                merged_indices = [i]
+                
+                for method_idx in sorted(method_blocks[class_name]):
+                    if method_idx > i:  # 只考虑当前块之后的方法块
+                        method_text, method_path = chunks[method_idx]
+                        method_tokens = num_tokens_from_string(method_text)
+                        
+                        # 检查合并后是否超过大小限制
+                        separator = "\n\n" if path == method_path else "\n"
+                        if merged_tokens + method_tokens + num_tokens_from_string(separator) <= self.max_chunk_size:
+                            merged_chunk += separator + method_text
+                            merged_tokens += method_tokens + num_tokens_from_string(separator)
+                            merged_indices.append(method_idx)
+                        else:
+                            break
+                
+                # 如果成功合并了方法，添加合并后的块并跳过已处理的索引
+                if len(merged_indices) > 1:
+                    result.append([merged_chunk, path])
+                    i = max(merged_indices) + 1
+                    continue
+            
+            # 正常处理逻辑
             if chunk_tokens >= min_chunk_size:
                 # 如果有累积的小块，先添加它
                 if current_chunk:
@@ -145,31 +191,35 @@ class RAGFlowCodeParser:
                     current_tokens = 0
                 
                 result.append([chunk_text, path])
-                continue
-                
-            # 处理小块
-            if not current_chunk:
-                # 开始新的累积块
-                current_chunk = chunk_text
-                current_tokens = chunk_tokens
-                current_path = path
-            elif current_tokens + chunk_tokens <= self.max_chunk_size:
-                # 可以合并到当前累积块
-                # 添加分隔符
-                if current_path == path:
-                    separator = "\n\n"
-                else:
-                    separator = f"\n\n# Path: {path}\n"
-                    
-                current_chunk += separator + chunk_text
-                current_tokens += chunk_tokens + num_tokens_from_string(separator)
-                # 保持路径不变或合并路径
             else:
-                # 当前累积块已满，添加到结果并开始新块
-                result.append([current_chunk, current_path])
-                current_chunk = chunk_text
-                current_tokens = chunk_tokens
-                current_path = path
+                # 处理小块
+                if not current_chunk:
+                    # 开始新的累积块
+                    current_chunk = chunk_text
+                    current_tokens = chunk_tokens
+                    current_path = path
+                elif current_tokens + chunk_tokens <= self.max_chunk_size:
+                    # 可以合并到当前累积块
+                    # 添加分隔符，避免使用 # Path: 注释，它可能导致代码结构被破坏
+                    if current_path == path:
+                        separator = "\n\n"
+                    else:
+                        # 如果路径看起来是类.方法结构，使用更智能的分隔
+                        if '.' in current_path and '.' in path and current_path.split('.')[0] == path.split('.')[0]:
+                            separator = "\n\n"
+                        else:
+                            separator = "\n\n# Path: " + path + "\n"
+                    
+                    current_chunk += separator + chunk_text
+                    current_tokens += chunk_tokens + num_tokens_from_string(separator)
+                else:
+                    # 当前累积块已满，添加到结果并开始新块
+                    result.append([current_chunk, current_path])
+                    current_chunk = chunk_text
+                    current_tokens = chunk_tokens
+                    current_path = path
+            
+            i += 1
         
         # 添加最后的累积块
         if current_chunk:
@@ -277,38 +327,72 @@ class RAGFlowCodeParser:
                 replacement_text = self.collapsed_replacement(grand_child.type)
                 folded_code = prefix + replacement_text + suffix
         
-        # 检查是否仍然太大，如果是，移除一些子节点
-        removed_child = False
-        while num_tokens_from_string(folded_code) > max_chunk_size and collapsed_children:
-            removed_child = True
-            # 从末尾开始移除子节点
-            child, collapsed_text, _ = collapsed_children.pop()
-            # 在代码中查找并移除该子节点的代码
-            child_start = child.start_byte - node.start_byte
-            child_end = child.end_byte - node.start_byte
+        # 检查是否仍然太大，如果是，使用更合适的折叠方式
+        if num_tokens_from_string(folded_code) > max_chunk_size:
+            # 检查节点类型，使用更专门的折叠方法
+            if node.type == 'class_definition':
+                return self._collapse_class(node, code_bytes)
+            elif node.type == 'function_definition':
+                return self._collapse_function(node, code_bytes)
             
-            if child_start >= 0 and child_end <= len(folded_code.encode()):
-                folded_bytes = folded_code.encode()
-                prefix = folded_bytes[:child_start].decode()
-                suffix = folded_bytes[child_end:].decode()
-                folded_code = prefix + suffix
-        
-        # 如果移除了子节点，清理多余的空行
-        if removed_child:
-            lines = folded_code.split('\n')
-            cleaned_lines = []
-            prev_empty = False
-            
-            for line in lines:
-                if line.strip() == '':
-                    if not prev_empty:
-                        cleaned_lines.append(line)
-                    prev_empty = True
+            # 如果不是类或函数，只能移除一些子节点，但保留它们的签名
+            removed_child = False
+            while num_tokens_from_string(folded_code) > max_chunk_size and collapsed_children:
+                removed_child = True
+                # 从末尾开始移除子节点
+                child, collapsed_text, grand_child = collapsed_children.pop()
+                # 获取子节点类型
+                child_type = child.type
+                
+                if child_type == 'function_definition':
+                    # 对于函数，只保留签名，不完全移除
+                    # 查找函数体
+                    func_body = None
+                    for func_child in child.children:
+                        if func_child.type in collapse_block_types:
+                            func_body = func_child
+                            break
+                    
+                    if func_body:
+                        # 获取函数签名
+                        child_start = child.start_byte - node.start_byte
+                        body_start = func_body.start_byte - node.start_byte
+                        child_end = child.end_byte - node.start_byte
+                        
+                        if child_start >= 0 and child_end <= len(folded_code.encode()):
+                            folded_bytes = folded_code.encode()
+                            # 提取前缀(包括函数签名)和后缀
+                            prefix = folded_bytes[:body_start].decode()
+                            suffix = folded_bytes[child_end:].decode()
+                            # 替换整个函数为"函数签名 + ..."
+                            folded_code = prefix + ":\n    ..." + suffix
                 else:
-                    cleaned_lines.append(line)
-                    prev_empty = False
+                    # 其他节点类型，保守地移除整个子节点
+                    child_start = child.start_byte - node.start_byte
+                    child_end = child.end_byte - node.start_byte
+                    
+                    if child_start >= 0 and child_end <= len(folded_code.encode()):
+                        folded_bytes = folded_code.encode()
+                        prefix = folded_bytes[:child_start].decode()
+                        suffix = folded_bytes[child_end:].decode()
+                        folded_code = prefix + suffix
             
-            folded_code = '\n'.join(cleaned_lines)
+            # 如果移除了子节点，清理多余的空行
+            if removed_child:
+                lines = folded_code.split('\n')
+                cleaned_lines = []
+                prev_empty = False
+                
+                for line in lines:
+                    if line.strip() == '':
+                        if not prev_empty:
+                            cleaned_lines.append(line)
+                        prev_empty = True
+                    else:
+                        cleaned_lines.append(line)
+                        prev_empty = False
+                
+                folded_code = '\n'.join(cleaned_lines)
         
         return folded_code
     
