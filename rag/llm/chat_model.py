@@ -970,6 +970,19 @@ class LocalAIChat(Base):
         self.client = OpenAI(api_key="empty", base_url=base_url)
         self.model_name = model_name.split("___")[0]
 
+    def chat(self, system, history, gen_conf):
+        # 将max_tokens改名为max_completion_tokens
+        if "max_tokens" in gen_conf:
+            gen_conf["max_completion_tokens"] = gen_conf.pop("max_tokens")
+        logging.info(f'use max_completion_tokens,{gen_conf}')
+        return super().chat(system, history, gen_conf)
+
+    def chat_streamly(self, system, history, gen_conf):
+        # 将max_tokens改名为max_completion_tokens
+        if "max_tokens" in gen_conf:
+            gen_conf["max_completion_tokens"] = gen_conf.pop("max_tokens")
+        logging.info(f'use max_completion_tokens,{gen_conf}')
+        return super().chat_streamly(system, history, gen_conf)
 
 class LocalLLM(Base):
     class RPCProxy:
