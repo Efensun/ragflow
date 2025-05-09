@@ -973,14 +973,14 @@ class LocalAIChat(Base):
     def chat(self, system, history, gen_conf):
         # 将max_tokens改名为max_completion_tokens
         if "max_tokens" in gen_conf:
-            gen_conf["max_completion_tokens"] = gen_conf.pop("max_tokens")
+            gen_conf["max_completion_tokens"] = gen_conf.pop("max_tokens",32768)
         logging.info(f'use max_completion_tokens,{gen_conf}')
         return super().chat(system, history, gen_conf)
 
     def chat_streamly(self, system, history, gen_conf):
         # 将max_tokens改名为max_completion_tokens
         if "max_tokens" in gen_conf:
-            gen_conf["max_completion_tokens"] = gen_conf.pop("max_tokens")
+            gen_conf["max_completion_tokens"] = gen_conf.pop("max_tokens",32768)
         logging.info(f'use max_completion_tokens,{gen_conf}')
         return super().chat_streamly(system, history, gen_conf)
 
