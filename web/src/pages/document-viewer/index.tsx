@@ -1,14 +1,14 @@
 import { Images } from '@/constants/common';
 import { api_host } from '@/utils/api';
+import { previewHtmlFile } from '@/utils/file-util';
 import { Flex } from 'antd';
 import { useParams, useSearchParams } from 'umi';
 import Docx from './docx';
 import Excel from './excel';
 import Image from './image';
-import Pdf from './pdf';
-
-import { previewHtmlFile } from '@/utils/file-util';
 import styles from './index.less';
+import Markdown from './markdown';
+import Pdf from './pdf';
 
 // TODO: The interface returns an incorrect content-type for the SVG.
 
@@ -33,8 +33,8 @@ const DocumentViewer = () => {
       )}
       {ext === 'pdf' && <Pdf url={api}></Pdf>}
       {(ext === 'xlsx' || ext === 'xls') && <Excel filePath={api}></Excel>}
-
       {ext === 'docx' && <Docx filePath={api}></Docx>}
+      {ext === 'md' && <Markdown url={api}></Markdown>}
     </section>
   );
 };
