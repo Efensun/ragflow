@@ -202,15 +202,16 @@ const MarkdownContent = ({
     useEffect(() => {
       if (!src) return;
 
-      const img = new Image();
-      img.onload = () => {
-        setDimensions({ width: img.width, height: img.height });
+      // 使用 HTMLImageElement 而不是 Image 构造函数
+      const imgElement = document.createElement('img');
+      imgElement.onload = () => {
+        setDimensions({ width: imgElement.width, height: imgElement.height });
         setIsLoading(false);
       };
-      img.onerror = () => {
+      imgElement.onerror = () => {
         setIsLoading(false);
       };
-      img.src = src;
+      imgElement.src = src;
     }, [src]);
 
     // 计算缩放后的尺寸
