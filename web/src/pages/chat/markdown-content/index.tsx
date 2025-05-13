@@ -5,7 +5,7 @@ import { getExtension } from '@/utils/document-util';
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { Button, Flex, Popover } from 'antd';
 import DOMPurify from 'dompurify';
-import { useCallback, useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Markdown from 'react-markdown';
 import reactStringReplace from 'react-string-replace';
 import SyntaxHighlighter from 'react-syntax-highlighter';
@@ -188,6 +188,74 @@ const MarkdownContent = ({
     [getPopoverContent],
   );
 
+  const ResponsiveImage = ({
+    src,
+    alt,
+    ...rest
+  }: React.ImgHTMLAttributes<HTMLImageElement>) => {
+    const [dimensions, setDimensions] = useState<{
+      width: number;
+      height: number;
+    } | null>(null);
+    const [isLoading, setIsLoading] = useState(true);
+
+    useEffect(() => {
+      if (!src) return;
+
+      const img = new Image();
+      img.onload = () => {
+        setDimensions({ width: img.width, height: img.height });
+        setIsLoading(false);
+      };
+      img.onerror = () => {
+        setIsLoading(false);
+      };
+      img.src = src;
+    }, [src]);
+
+    // 计算缩放后的尺寸
+    const getScaledDimensions = () => {
+      if (!dimensions) return {};
+
+      const maxWidth = 800; // 最大宽度
+      const maxHeight = 600; // 最大高度
+
+      let { width, height } = dimensions;
+
+      // 如果图片尺寸超过限制，按比例缩放
+      if (width > maxWidth || height > maxHeight) {
+        const ratioWidth = maxWidth / width;
+        const ratioHeight = maxHeight / height;
+        const ratio = Math.min(ratioWidth, ratioHeight);
+
+        width = Math.floor(width * ratio);
+        height = Math.floor(height * ratio);
+      }
+
+      return { width, height };
+    };
+
+    const scaledDimensions = getScaledDimensions();
+
+    return (
+      <div className={styles.imageContainer}>
+        {isLoading && <div className={styles.imageLoading}>Loading...</div>}
+        <img
+          src={src}
+          alt={alt || ''}
+          {...rest}
+          {...scaledDimensions}
+          className={classNames(styles.markdownImage, rest.className)}
+          style={{
+            maxWidth: '100%',
+            display: isLoading ? 'none' : 'block',
+            ...rest.style,
+          }}
+        />
+      </div>
+    );
+  };
+
   return (
     <Markdown
       rehypePlugins={[rehypeWrapReference, rehypeKatex, rehypeRaw]}
@@ -214,6 +282,9 @@ const MarkdownContent = ({
                 {children}
               </code>
             );
+          },
+          img(props: any) {
+            return <ResponsiveImage {...props} />;
           },
         } as any
       }
