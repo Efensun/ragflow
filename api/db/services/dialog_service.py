@@ -140,6 +140,7 @@ def chat(dialog, messages, conv_id, stream=True, **kwargs):
         llm_model_config = TenantLLMService.get_model_config(dialog.tenant_id, LLMType.CHAT, dialog.llm_id)
 
     max_tokens = llm_model_config.get("max_tokens", 8192)
+    logging.warning("model config: {}".format(llm_model_config))
 
     check_llm_ts = timer()
 
@@ -180,6 +181,7 @@ def chat(dialog, messages, conv_id, stream=True, **kwargs):
         chat_mdl = LLMBundle(dialog.tenant_id, LLMType.IMAGE2TEXT, dialog.llm_id)
     else:
         chat_mdl = LLMBundle(dialog.tenant_id, LLMType.CHAT, dialog.llm_id)
+        logging.warning("chat model: {}".format(chat_mdl))
         toolcall_session, tools = kwargs.get("toolcall_session"), kwargs.get("tools")
         if toolcall_session and tools:
             chat_mdl.bind_tools(toolcall_session, tools)
@@ -303,7 +305,7 @@ def chat(dialog, messages, conv_id, stream=True, **kwargs):
 
     if "max_tokens" in gen_conf:
         gen_conf["max_tokens"] = min(gen_conf["max_tokens"], max_tokens - used_token_count)
-
+        logging.warning(f"final max_tokens={gen_conf['max_tokens']}")
     def decorate_answer(answer):
         nonlocal prompt_config, knowledges, kwargs, kbinfos, prompt, retrieval_ts, questions, langfuse_tracer
 
