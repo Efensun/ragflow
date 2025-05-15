@@ -447,6 +447,12 @@ class XinferenceChat(Base):
             base_url = os.path.join(base_url, "v1")
         super().__init__(key, model_name, base_url)
 
+    def chat(self, system, history, gen_conf):
+        # 将max_tokens改名为max_completion_tokens
+        if "max_tokens" not in  gen_conf:
+            gen_conf["max_completion_tokens"] = 32768
+        logging.info(f'use max_completion_tokens,{gen_conf}')
+        return super().chat(system, history, gen_conf)
 
 class HuggingFaceChat(Base):
     def __init__(self, key=None, model_name="", base_url=""):
