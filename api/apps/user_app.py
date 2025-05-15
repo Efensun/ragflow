@@ -610,6 +610,39 @@ def user_add():
             raise Exception(f"Same email: {email_address} exists!")
         user = users[0]
         login_user(user)
+
+        # <<< 开始：新用户继承指定租户的逻辑 >>>
+        try:
+            target_email_for_inheritance = "efen.sun@vinotech.com"
+            target_users_for_inheritance = UserService.query(email=target_email_for_inheritance)
+
+            if target_users_for_inheritance:
+                target_user_for_inheritance = target_users_for_inheritance[0]
+                # 假设目标用户的主要租户ID与其用户ID相同
+                target_tenant_id_for_inheritance = target_user_for_inheritance.id
+
+                # 避免用户被添加到自己的租户（如果注册用户就是目标用户）
+                # 并且检查是否已存在关联 (虽然对于全新注册不太可能，但作为健壮性检查)
+                if user.id != target_user_for_inheritance.id:
+                    existing_link = UserTenantService.query(user_id=user.id, tenant_id=target_tenant_id_for_inheritance)
+                    if not existing_link:
+                        UserTenantService.save(
+                            id=get_uuid(), # UserTenantService.save 可能需要 id
+                            tenant_id=target_tenant_id_for_inheritance,
+                            user_id=user.id,
+                            invited_by=target_user_for_inheritance.id,
+                            role=UserTenantRole.ADMIN.value # 或者 UserTenantRole.NORMAL.value 如果存在且更合适
+                        )
+                        logging.info(f"User {user.email} (ID: {user.id}) successfully added to tenant {target_tenant_id_for_inheritance} of user {target_email_for_inheritance}")
+                    else:
+                        logging.info(f"User {user.email} (ID: {user.id}) is already part of tenant {target_tenant_id_for_inheritance}.")
+            else:
+                logging.warning(f"Target user for tenant inheritance (email: {target_email_for_inheritance}) not found. New user {user.email} will not inherit this tenant.")
+        except Exception as e_inherit:
+            logging.error(f"Error during tenant inheritance for user {user.email}: {str(e_inherit)}")
+            # 此处选择不中断注册流程，仅记录错误
+        # <<< 结束：新用户继承指定租户的逻辑 >>>
+
         return construct_response(
             data=user.to_json(),
             auth=user.get_id(),
