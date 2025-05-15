@@ -662,18 +662,46 @@ def user_add():
             if source_tenant_users:
                 source_tenant_user = source_tenant_users[0]
                 # 假设目标用户A的主要租户ID就是其用户ID
-                id_of_tenant_assigned_to = source_tenant_user.id 
+                template_tenant_id = source_tenant_user.id 
                 source_tenant_owner_id = source_tenant_user.id
                 
-                logging.info(f"New user {email_address} will be directly assigned to tenant {id_of_tenant_assigned_to} from user {target_email_for_tenant_source}.")
-                # 您可以在这里决定新用户在共享租户中的角色，例如 UserTenantRole.NORMAL.value
-                users = user_register(user_id, user_dict,
-                                      assign_to_existing_tenant_id=id_of_tenant_assigned_to,
-                                      invited_to_existing_tenant_by_user_id=source_tenant_owner_id,
-                                      role_in_assigned_tenant=UserTenantRole.ADMIN.value) # 或者更合适的角色
-                assigned_to_existing = True if users else False
+                logging.info(f"New user {email_address} will be directly assigned to tenant {template_tenant_id} from user {target_email_for_tenant_source} with OWNER role (for testing).")
+                # 为新用户创建基本的User记录 (如果尚未创建或希望分离逻辑)
+                # 注意：如果 user_register 也创建 UserTenant 记录，需小心重复
+                # 在我们之前的方案中，user_register 内部的 _create_own_tenant_resources 不会被调用
+                # 而是直接创建 UserTenant 链接。
+                # 首先确保用户记录存在
+                saved_user_check = UserService.query(id=user_id)
+                if not saved_user_check:
+                    UserService.save(**user_dict)
+
+
+                UserTenantService.save(
+                    id=get_uuid(),
+                    tenant_id=template_tenant_id,
+                    user_id=user_id, # 新用户的 ID
+                    invited_by=source_tenant_owner_id,
+                    role=UserTenantRole.OWNER.value # <<< 修改点：设置为 OWNER 角色 (仅用于测试)
+                )
+                logging.info(f"User {email_address} (ID: {user_id}) added to template tenant {template_tenant_id} with OWNER role.")
+                
+                # 查询新创建或引用的用户记录
+                users = UserService.query(email=email_address)
+                
+                # 既然用户直接使用模板用户的租户作为OWNER，理论上不应该再创建自己的个人租户资源
+                # 所以 _create_own_tenant_resources 不应被调用
+                # 同时，原始的 user_register 函数的调用方式也需要调整，避免它创建个人租户
+
+                # 调整：如果用户被赋予了OWNER角色到模板租户，就不再为其创建个人租户
+                # （这部分逻辑在之前的方案中是，如果assign_to_existing_tenant_id则不创建个人租户）
+                # 为确保清晰，我们这里假设 UserService.save 已经处理了用户创建
+                # 并且 UserTenantService.save 处理了租户关联
+                
+                assigned_to_existing = True # 标记一下，用于回滚逻辑
+                id_of_tenant_assigned_to = template_tenant_id
+
             else:
-                # 目标邮件用户未找到，则为新用户创建个人租户
+                # 目标邮件用户未找到，则为新用户创建个人租户 (标准流程)
                 logging.warning(f"Target user {target_email_for_tenant_source} for tenant source not found. New user {email_address} will get their own personal tenant.")
                 users = user_register(user_id, user_dict)
 
@@ -692,24 +720,22 @@ def user_add():
         logging.error(f"User registration outer exception for {email_address}: {str(e)}")
         # 精细化回滚
         if assigned_to_existing and id_of_tenant_assigned_to:
-            # 如果是分配到现有租户失败，或后续操作失败
             try:
                 logging.info(f"Rolling back assignment for user {user_id} from tenant {id_of_tenant_assigned_to}")
                 links_to_delete = UserTenantService.query(user_id=user_id, tenant_id=id_of_tenant_assigned_to)
                 for link in links_to_delete:
                     UserTenantService.delete_by_id(link.id)
-                UserService.delete_by_id(user_id) # 删除用户记录
+                UserService.delete_by_id(user_id) 
             except Exception as rb_ex:
                 logging.error(f"Error during specific rollback for assigned tenant: {str(rb_ex)}")
         else:
-            # 如果是创建个人租户失败，或后续操作失败
             logging.info(f"Rolling back standard registration for user ID {user_id}")
-            rollback_user_registration(user_id) # 使用原始的回滚逻辑
+            rollback_user_registration(user_id) 
 
-        logging.exception(e) # 记录原始异常的完整堆栈
+        logging.exception(e) 
         return get_json_result(
             data=False,
-            message=f"User registration failure. Error: {str(e)}", # 向用户显示更通用的错误信息
+            message=f"User registration failure. Error: {str(e)}", 
             code=settings.RetCode.EXCEPTION_ERROR,
         )
 
