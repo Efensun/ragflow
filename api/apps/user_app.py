@@ -479,56 +479,98 @@ def rollback_user_registration(user_id):
         pass
 
 
-def user_register(user_id, user):
-    user["id"] = user_id
+def _create_own_tenant_resources(tenant_id_for_new_user, nickname_for_new_user, user_id_of_new_user):
+    """
+    辅助函数：为新用户创建其自有的租户及相关默认资源。
+    """
     tenant = {
-        "id": user_id,
-        "name": user["nickname"] + "‘s Kingdom",
+        "id": tenant_id_for_new_user,
+        "name": nickname_for_new_user + "‘s Kingdom",
         "llm_id": settings.CHAT_MDL,
         "embd_id": settings.EMBEDDING_MDL,
         "asr_id": settings.ASR_MDL,
         "parser_ids": settings.PARSERS,
         "img2txt_id": settings.IMAGE2TEXT_MDL,
         "rerank_id": settings.RERANK_MDL,
+        "tts_id": settings.TTS_MDL if hasattr(settings, "TTS_MDL") else "", # 添加TTS_MDL
     }
-    usr_tenant = {
-        "tenant_id": user_id,
-        "user_id": user_id,
-        "invited_by": user_id,
-        "role": UserTenantRole.OWNER,
+    usr_tenant_owner_link = {
+        "id": get_uuid(), 
+        "tenant_id": tenant_id_for_new_user,
+        "user_id": user_id_of_new_user,
+        "invited_by": user_id_of_new_user, 
+        "role": UserTenantRole.OWNER.value,
     }
     file_id = get_uuid()
-    file = {
+    root_file = {
         "id": file_id,
         "parent_id": file_id,
-        "tenant_id": user_id,
-        "created_by": user_id,
+        "tenant_id": tenant_id_for_new_user,
+        "created_by": user_id_of_new_user,
         "name": "/",
         "type": FileType.FOLDER.value,
         "size": 0,
         "location": "",
     }
-    tenant_llm = []
-    for llm in LLMService.query(fid=settings.LLM_FACTORY):
-        tenant_llm.append(
-            {
-                "tenant_id": user_id,
-                "llm_factory": settings.LLM_FACTORY,
-                "llm_name": llm.llm_name,
-                "model_type": llm.model_type,
-                "api_key": settings.API_KEY,
-                "api_base": settings.LLM_BASE_URL,
-                "max_tokens": llm.max_tokens if llm.max_tokens else 8192
-            }
-        )
-
-    if not UserService.save(**user):
-        return
+    tenant_llm_configs = []
+    if hasattr(settings, "LLM_FACTORY") and settings.LLM_FACTORY:
+        for llm in LLMService.query(fid=settings.LLM_FACTORY):
+            tenant_llm_configs.append(
+                {
+                    "tenant_id": tenant_id_for_new_user,
+                    "llm_factory": settings.LLM_FACTORY,
+                    "llm_name": llm.llm_name,
+                    "model_type": llm.model_type,
+                    "api_key": settings.API_KEY if hasattr(settings, "API_KEY") else "",
+                    "api_base": settings.LLM_BASE_URL if hasattr(settings, "LLM_BASE_URL") else "",
+                    "max_tokens": llm.max_tokens if llm.max_tokens else 8192
+                }
+            )
+    
     TenantService.insert(**tenant)
-    UserTenantService.insert(**usr_tenant)
-    TenantLLMService.insert_many(tenant_llm)
-    FileService.insert(file)
-    return UserService.query(email=user["email"])
+    UserTenantService.insert(**usr_tenant_owner_link)
+    if tenant_llm_configs:
+        TenantLLMService.insert_many(tenant_llm_configs)
+    FileService.insert(root_file)
+    logging.info(f"Created own tenant resources for user ID {user_id_of_new_user} (Tenant ID: {tenant_id_for_new_user})")
+
+
+def user_register(user_id, user_info, 
+                  assign_to_existing_tenant_id=None, 
+                  invited_to_existing_tenant_by_user_id=None,
+                  role_in_assigned_tenant=UserTenantRole.ADMIN.value): # 新增角色参数
+    """
+    注册新用户。
+    如果提供了 assign_to_existing_tenant_id，用户将被添加到该现有租户，
+    并且不会创建其个人的租户。
+    否则，将为用户创建一个新的个人租户。
+    """
+    # 始终先保存用户对象本身
+    saved_user = UserService.save(**user_info) # user_info 应该已包含 id=user_id
+    if not saved_user:
+        logging.error(f"Failed to save user: {user_info.get('email')}")
+        return None # 返回 None 或引发异常
+
+    if assign_to_existing_tenant_id:
+        # 将用户添加到指定的现有租户
+        user_tenant_link = {
+            "id": get_uuid(), 
+            "tenant_id": assign_to_existing_tenant_id,
+            "user_id": user_id, # 新用户的 ID
+            "invited_by": invited_to_existing_tenant_by_user_id, # "拥有"目标租户的用户的ID
+            "role": role_in_assigned_tenant, 
+        }
+        UserTenantService.insert(**user_tenant_link)
+        logging.info(f"User {user_info.get('email')} (ID: {user_id}) assigned to existing tenant {assign_to_existing_tenant_id} with role {role_in_assigned_tenant}.")
+    else:
+        # 为用户创建新的个人租户 (租户ID与用户ID相同)
+        _create_own_tenant_resources(tenant_id_for_new_user=user_id, 
+                                     nickname_for_new_user=user_info["nickname"], 
+                                     user_id_of_new_user=user_id)
+        # logging 已在 _create_own_tenant_resources 中
+
+    # 查询并返回刚创建或刚被引用的用户记录
+    return UserService.query(email=user_info["email"])
 
 
 @manager.route("/register", methods=["POST"])  # noqa: F821
@@ -591,7 +633,9 @@ def user_add():
 
     # Construct user info data
     nickname = req["nickname"]
+    user_id = get_uuid() # ID for the new user
     user_dict = {
+        "id": user_id, # <--- 确保 user_dict 包含 id
         "access_token": get_uuid(),
         "email": email_address,
         "nickname": nickname,
@@ -600,60 +644,72 @@ def user_add():
         "last_login_time": get_format_time(),
         "is_superuser": False,
     }
+    
+    # 用于回滚的标志
+    assigned_to_existing = False
+    id_of_tenant_assigned_to = None
 
-    user_id = get_uuid()
     try:
-        users = user_register(user_id, user_dict)
-        if not users:
-            raise Exception(f"Fail to register {email_address}.")
-        if len(users) > 1:
-            raise Exception(f"Same email: {email_address} exists!")
-        user = users[0]
-        login_user(user)
-
-        # <<< 开始：新用户继承指定租户的逻辑 >>>
-        try:
-            target_email_for_inheritance = "efen.sun@vinotech.com"
-            target_users_for_inheritance = UserService.query(email=target_email_for_inheritance)
-
-            if target_users_for_inheritance:
-                target_user_for_inheritance = target_users_for_inheritance[0]
-                # 假设目标用户的主要租户ID与其用户ID相同
-                target_tenant_id_for_inheritance = target_user_for_inheritance.id
-
-                # 避免用户被添加到自己的租户（如果注册用户就是目标用户）
-                # 并且检查是否已存在关联 (虽然对于全新注册不太可能，但作为健壮性检查)
-                if user.id != target_user_for_inheritance.id:
-                    existing_link = UserTenantService.query(user_id=user.id, tenant_id=target_tenant_id_for_inheritance)
-                    if not existing_link:
-                        UserTenantService.save(
-                            id=get_uuid(), # UserTenantService.save 可能需要 id
-                            tenant_id=target_tenant_id_for_inheritance,
-                            user_id=user.id,
-                            invited_by=target_user_for_inheritance.id,
-                            role=UserTenantRole.ADMIN.value # 或者 UserTenantRole.NORMAL.value 如果存在且更合适
-                        )
-                        logging.info(f"User {user.email} (ID: {user.id}) successfully added to tenant {target_tenant_id_for_inheritance} of user {target_email_for_inheritance}")
-                    else:
-                        logging.info(f"User {user.email} (ID: {user.id}) is already part of tenant {target_tenant_id_for_inheritance}.")
+        target_email_for_tenant_source = "efen.sun@vinotech.com"
+        
+        if email_address.lower() == target_email_for_tenant_source.lower():
+            # 如果注册用户就是目标邮件用户，则正常创建其个人租户
+            logging.info(f"User {email_address} is the target tenant source; proceeding with standard personal tenant creation.")
+            users = user_register(user_id, user_dict)
+        else:
+            # 尝试将新用户分配给目标邮件用户的租户
+            source_tenant_users = UserService.query(email=target_email_for_tenant_source)
+            if source_tenant_users:
+                source_tenant_user = source_tenant_users[0]
+                # 假设目标用户A的主要租户ID就是其用户ID
+                id_of_tenant_assigned_to = source_tenant_user.id 
+                source_tenant_owner_id = source_tenant_user.id
+                
+                logging.info(f"New user {email_address} will be directly assigned to tenant {id_of_tenant_assigned_to} from user {target_email_for_tenant_source}.")
+                # 您可以在这里决定新用户在共享租户中的角色，例如 UserTenantRole.NORMAL.value
+                users = user_register(user_id, user_dict,
+                                      assign_to_existing_tenant_id=id_of_tenant_assigned_to,
+                                      invited_to_existing_tenant_by_user_id=source_tenant_owner_id,
+                                      role_in_assigned_tenant=UserTenantRole.ADMIN.value) # 或者更合适的角色
+                assigned_to_existing = True if users else False
             else:
-                logging.warning(f"Target user for tenant inheritance (email: {target_email_for_inheritance}) not found. New user {user.email} will not inherit this tenant.")
-        except Exception as e_inherit:
-            logging.error(f"Error during tenant inheritance for user {user.email}: {str(e_inherit)}")
-            # 此处选择不中断注册流程，仅记录错误
-        # <<< 结束：新用户继承指定租户的逻辑 >>>
+                # 目标邮件用户未找到，则为新用户创建个人租户
+                logging.warning(f"Target user {target_email_for_tenant_source} for tenant source not found. New user {email_address} will get their own personal tenant.")
+                users = user_register(user_id, user_dict)
 
+        if not users:
+            # user_register 返回 None 或空列表表示失败
+            raise Exception(f"User registration process failed for {email_address}.")
+        
+        user = users[0] # user_register 返回的是列表
+        login_user(user)
         return construct_response(
             data=user.to_json(),
             auth=user.get_id(),
             message=f"{nickname}, welcome aboard!",
         )
     except Exception as e:
-        rollback_user_registration(user_id)
-        logging.exception(e)
+        logging.error(f"User registration outer exception for {email_address}: {str(e)}")
+        # 精细化回滚
+        if assigned_to_existing and id_of_tenant_assigned_to:
+            # 如果是分配到现有租户失败，或后续操作失败
+            try:
+                logging.info(f"Rolling back assignment for user {user_id} from tenant {id_of_tenant_assigned_to}")
+                links_to_delete = UserTenantService.query(user_id=user_id, tenant_id=id_of_tenant_assigned_to)
+                for link in links_to_delete:
+                    UserTenantService.delete_by_id(link.id)
+                UserService.delete_by_id(user_id) # 删除用户记录
+            except Exception as rb_ex:
+                logging.error(f"Error during specific rollback for assigned tenant: {str(rb_ex)}")
+        else:
+            # 如果是创建个人租户失败，或后续操作失败
+            logging.info(f"Rolling back standard registration for user ID {user_id}")
+            rollback_user_registration(user_id) # 使用原始的回滚逻辑
+
+        logging.exception(e) # 记录原始异常的完整堆栈
         return get_json_result(
             data=False,
-            message=f"User registration failure, error: {str(e)}",
+            message=f"User registration failure. Error: {str(e)}", # 向用户显示更通用的错误信息
             code=settings.RetCode.EXCEPTION_ERROR,
         )
 
