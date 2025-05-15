@@ -181,7 +181,11 @@ def chat(dialog, messages, conv_id, stream=True, **kwargs):
         chat_mdl = LLMBundle(dialog.tenant_id, LLMType.IMAGE2TEXT, dialog.llm_id)
     else:
         chat_mdl = LLMBundle(dialog.tenant_id, LLMType.CHAT, dialog.llm_id)
-        logging.warning("chat model: {}".format(chat_mdl))
+        logging.warning("chat model: {}, model type: {}, model class: {}".format(
+            chat_mdl.llm_name,
+            type(chat_mdl).__name__,
+            type(chat_mdl.mdl).__name__
+        ))
         toolcall_session, tools = kwargs.get("toolcall_session"), kwargs.get("tools")
         if toolcall_session and tools:
             chat_mdl.bind_tools(toolcall_session, tools)

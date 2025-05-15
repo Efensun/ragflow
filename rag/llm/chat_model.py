@@ -178,9 +178,10 @@ class Base(ABC):
     def chat(self, system, history, gen_conf):
         if system:
             history.insert(0, {"role": "system", "content": system})
-        # if "max_tokens" in gen_conf:
-        #     del gen_conf["max_tokens"]
+        if "max_tokens" not in gen_conf:
+            gen_conf["max_tokens"] = 32768
 
+        logging.info(f"final args chat_streamly: {gen_conf}")
         # Implement exponential backoff retry strategy
         for attempt in range(self.max_retries):
             try:
@@ -228,8 +229,8 @@ class Base(ABC):
         return final_tool_calls
 
     def chat_streamly_with_tools(self, system: str, history: list, gen_conf: dict):
-        if "max_tokens" in gen_conf:
-            del gen_conf["max_tokens"]
+        if "max_tokens" not in gen_conf:
+            gen_conf["max_tokens"] = 32768
 
         tools = self.tools
 
@@ -337,8 +338,11 @@ class Base(ABC):
     def chat_streamly(self, system, history, gen_conf):
         if system:
             history.insert(0, {"role": "system", "content": system})
-        if "max_tokens" in gen_conf:
-            del gen_conf["max_tokens"]
+
+        if "max_tokens" not in gen_conf:
+            gen_conf["max_tokens"] = 32768
+
+        logging.info(f"final args chat_streamly: {gen_conf}")
         ans = ""
         total_tokens = 0
         reasoning_start = False
@@ -447,13 +451,6 @@ class XinferenceChat(Base):
             base_url = os.path.join(base_url, "v1")
         super().__init__(key, model_name, base_url)
 
-    def chat(self, system, history, gen_conf):
-        # 将max_tokens改名为max_completion_tokens
-        if "max_tokens" not in  gen_conf:
-            gen_conf["max_completion_tokens"] = 32768
-            gen_conf["max_tokens"] = 32768
-        logging.info(f'set max tokens,{gen_conf}')
-        return super().chat(system, history, gen_conf)
 
 class HuggingFaceChat(Base):
     def __init__(self, key=None, model_name="", base_url=""):
