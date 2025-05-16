@@ -149,15 +149,37 @@ def get_kb_names(kb_ids):
 @login_required
 def list_dialogs():
     try:
-        diags = DialogService.query(
-            tenant_id=current_user.id,
-            status=StatusEnum.VALID.value,
-            reverse=True,
-            order_by=DialogService.model.create_time)
-        diags = [d.to_dict() for d in diags]
-        for d in diags:
-            d["kb_ids"], d["kb_names"] = get_kb_names(d["kb_ids"])
-        return get_json_result(data=diags)
+        # 1. 获取当前用户有权访问的租户信息列表 (OWNER 或 ADMIN 角色)
+        accessible_tenants_info = TenantService.get_info_by(current_user.id)
+        
+        if not accessible_tenants_info:
+            # 如果用户不属于任何 OWNER 或 ADMIN 的租户 (理论上至少是自己的 OWNER)
+            # 或者 get_info_by 返回空，则直接返回空对话列表
+            return get_json_result(data=[])
+
+        accessible_tenant_ids = [t_info["tenant_id"] for t_info in accessible_tenants_info]
+
+        all_diags_objects = []
+        if accessible_tenant_ids:
+            # 2. 查询这些租户下的所有有效对话
+            # CommonService.query (DialogService 继承自它) 应该能处理
+            # 当一个键对应的值是列表时，自动转换为 IN 查询
+            all_diags_objects = DialogService.query(
+                tenant_id=accessible_tenant_ids, 
+                status=StatusEnum.VALID.value,
+                reverse=True,
+                order_by=DialogService.model.create_time # 使用模型类来引用字段
+            )
+        
+        # 将查询结果（模型对象列表）转换为字典列表
+        diags_as_dicts = [d.to_dict() for d in all_diags_objects]
+        
+        # 3. 为每个对话获取关联的知识库名称
+        for d_dict in diags_as_dicts:
+            # kb_ids 可能为空列表或 None，get_kb_names 需要能处理
+            d_dict["kb_ids"], d_dict["kb_names"] = get_kb_names(d_dict.get("kb_ids", []))
+            
+        return get_json_result(data=diags_as_dicts)
     except Exception as e:
         return server_error_response(e)
 
