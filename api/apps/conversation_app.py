@@ -154,16 +154,52 @@ def rm():
 
 @manager.route("/list", methods=["GET"])  # noqa: F821
 @login_required
-def list_convsersation():
-    dialog_id = request.args["dialog_id"]
-    try:
-        if not DialogService.query(tenant_id=current_user.id, id=dialog_id):
-            return get_json_result(data=False, message="Only owner of dialog authorized for this operation.", code=settings.RetCode.OPERATING_ERROR)
-        convs = ConversationService.query(dialog_id=dialog_id, order_by=ConversationService.model.create_time, reverse=True)
+def list_conversations():
+    dialog_id = request.args.get("dialog_id")
+    if not dialog_id:
+        return get_data_error_result(message="dialog_id parameter is required.")
 
+    try:
+        # Step 1: Get the dialog to find its tenant_id
+        dialog_exists, dialog_obj = DialogService.get_by_id(dialog_id)
+        if not dialog_exists:
+            return get_data_error_result(message="Dialog not found.")
+        
+        target_tenant_id = dialog_obj.tenant_id
+
+        # Step 2: Get all tenant_ids the current user has (OWNER or ADMIN) access to
+        # TenantService.get_info_by was previously modified to return tenants where user is OWNER or ADMIN
+        accessible_tenants_info = TenantService.get_info_by(current_user.id)
+        if not accessible_tenants_info:
+            # This case should ideally not be hit if a user is logged in, as they should at least have their own tenant.
+            return get_json_result(
+                data=[], 
+                message="User has no accessible tenants.", 
+                code=settings.RetCode.AUTHENTICATION_ERROR # Or an appropriate error code
+            )
+        
+        accessible_tenant_ids = [t_info["tenant_id"] for t_info in accessible_tenants_info]
+
+        # Step 3: Check if the dialog's tenant is among the user's accessible tenants
+        if target_tenant_id not in accessible_tenant_ids:
+            return get_json_result(
+                data=[], 
+                message="Access to conversations in this dialog is denied for the current user.",
+                code=settings.RetCode.PERMISSION_ERROR # Or an appropriate error code
+            )
+
+        # If access is confirmed, proceed to get conversations
+        convs = ConversationService.query(
+            dialog_id=dialog_id,
+            order_by=ConversationService.model.create_time,
+            reverse=True,
+        )
         convs = [d.to_dict() for d in convs]
         return get_json_result(data=convs)
     except Exception as e:
+        # It's good practice to log the exception for server-side debugging
+        # import traceback
+        # traceback.print_exc()
         return server_error_response(e)
 
 
@@ -385,10 +421,10 @@ def related_questions():
     question = req["question"]
     chat_mdl = LLMBundle(current_user.id, LLMType.CHAT)
     prompt = """
-Role: You are an AI language model assistant tasked with generating 5-10 related questions based on a user’s original query. These questions should help expand the search query scope and improve search relevance.
+Role: You are an AI language model assistant tasked with generating 5-10 related questions based on a user's original query. These questions should help expand the search query scope and improve search relevance.
 
 Instructions:
-	Input: You are provided with a user’s question.
+	Input: You are provided with a user's question.
 	Output: Generate 5-10 alternative questions that are related to the original user question. These alternatives should help retrieve a broader range of relevant documents from a vector database.
 	Context: Focus on rephrasing the original question in different ways, making sure the alternative questions are diverse but still connected to the topic of the original query. Do not create overly obscure, irrelevant, or unrelated questions.
 	Fallback: If you cannot generate any relevant alternatives, do not return any questions.
