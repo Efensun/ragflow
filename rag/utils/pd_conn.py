@@ -404,20 +404,27 @@ class PDConnection(DocStoreConnection):
                                           "available_int", "embedding"]
                             filtered_doc = {k: v for k, v in doc.items() if k in valid_fields}
 
+                            # 构建INSERT部分
                             fields = ", ".join(filtered_doc.keys())
                             placeholders = ", ".join(["%s"] * len(filtered_doc))
+                            
+                            # 构建UPDATE部分 - 使用单独的字段赋值而不是列表
+                            update_clause = ", ".join([f"{k} = EXCLUDED.{k}" for k in filtered_doc.keys()])
 
                             sql = f"""
                                 INSERT INTO {indexName} (id, {fields})
                                 VALUES (%s, {placeholders})
                                 ON CONFLICT (id) DO UPDATE
-                                SET ({fields}) = ({placeholders})
+                                SET {update_clause}
                             """
 
-                            cur.execute(sql, [doc_id] + list(filtered_doc.values()) * 2)
+                            cur.execute(sql, [doc_id] + list(filtered_doc.values()))
                         except Exception as e:
                             errors.append(f"{doc_id}:{str(e)}")
                             logger.error(f"Insert error for doc {doc_id}: {str(e)}")
+                            # 回滚当前事务，避免整个批次失败
+                            conn.rollback()
+                            continue
 
                     conn.commit()
             return errors
