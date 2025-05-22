@@ -133,18 +133,9 @@ class PDConnection(DocStoreConnection):
                     
                     # 创建BM25索引 - 用于全文搜索
                     cur.execute(f"""
-                        CALL paradedb.create_bm25(
-                            index_name => '{indexName}_bm25',
-                            table_name => '{indexName}',
-                            key_field => 'id',
-                            text_fields => ARRAY[
-                                paradedb.field('content'),
-                                paradedb.field('title')
-                            ],
-                            numeric_fields => paradedb.field('kb_id'),
-                            boolean_fields => paradedb.field('available_int', as_int => true),
-                            json_fields => paradedb.field('metadata')
-                        )
+                        CREATE INDEX {indexName}_bm25 ON {indexName}
+                        USING bm25 (id, content, title, kb_id, available_int, metadata)
+                        WITH (key_field='id');
                     """)
                     
                     # 创建向量索引 - 用于向量相似度搜索
@@ -213,6 +204,16 @@ class PDConnection(DocStoreConnection):
         if isinstance(indexNames, str):
             indexNames = indexNames.split(",")
 
+        # 检查表是否存在，如果不存在则返回空结果
+        if not self.indexExist(indexNames[0]):
+            logger.warning(f"Table {indexNames[0]} does not exist, returning empty result")
+            return {
+                "hits": {
+                    "total": 0,
+                    "hits": []
+                }
+            }
+
         # 构建SELECT子句
         select_clause = []
         for field in selectFields:
@@ -230,13 +231,42 @@ class PDConnection(DocStoreConnection):
             params.append(knowledgebaseIds)
 
         # 处理匹配表达式
+        has_vector_search = False
+        vector_query = None
+        vector_topn = 10
+        vector_similarity_weight = 0.5  # 默认权重
+        has_text_search = False
+        text_query = None
+
+        # 首先检查是否有FusionExpr并提取权重
+        for m in matchExprs:
+            if isinstance(m, FusionExpr) and m.method == "weighted_sum" and "weights" in m.fusion_params:
+                # 假设匹配表达式顺序是：[MatchTextExpr, MatchDenseExpr, FusionExpr]
+                weights = m.fusion_params["weights"]
+                # 解析权重字符串，格式为: "文本权重, 向量权重"
+                weight_parts = weights.split(",")
+                if len(weight_parts) >= 2:
+                    try:
+                        # 文本搜索权重
+                        text_weight = float(weight_parts[0].strip())
+                        # 向量搜索权重
+                        vector_similarity_weight = float(weight_parts[1].strip())
+                        logger.debug(f"Using weights: text={text_weight}, vector={vector_similarity_weight}")
+                    except ValueError:
+                        logger.warning(f"Invalid weight format: {weights}, using default weight: text=0.5, vector={vector_similarity_weight}")
+
+        # 然后处理各种匹配表达式
         for expr in matchExprs:
             if isinstance(expr, MatchTextExpr):
+                has_text_search = True
+                text_query = expr.matching_text
                 where_conditions.append(f"{expr.fields[0]} @@@ %s")
                 params.append(expr.matching_text)
             elif isinstance(expr, MatchDenseExpr):
-                where_conditions.append(f"embedding <=> %s <= %s")
-                params.extend([expr.embedding_data, expr.topn])
+                # 标记存在向量搜索，稍后在ORDER BY中处理
+                has_vector_search = True
+                vector_query = expr.embedding_data
+                vector_topn = expr.topn
 
         # 构建WHERE子句字符串
         where_clause = ""
@@ -245,17 +275,40 @@ class PDConnection(DocStoreConnection):
 
         # 构建ORDER BY子句
         order_clause = []
+
+        # 混合搜索排序策略
+        # 与ES连接保持一致：无论权重如何都同时考虑文本搜索和向量搜索
+        # 参考ES连接实现方式: bqry.boost = 1.0 - vector_similarity_weight
+        if has_vector_search and has_text_search:
+            # 计算文本搜索权重
+            text_weight = 1.0 - vector_similarity_weight
+            
+            # 在WHERE子句中已经添加了文本搜索条件
+            # 在ORDER BY中添加向量搜索排序，确保两种搜索方式都被使用
+            order_clause = [f"embedding <=> %s"]
+            params.append(vector_query)
+            logger.info(f"Using hybrid search with weights: text={text_weight}, vector={vector_similarity_weight}")
+        elif has_vector_search:
+            # 只有向量搜索
+            order_clause = [f"embedding <=> %s"]
+            params.append(vector_query)
+            logger.info("Using vector search only")
+        elif has_text_search:
+            # 只有文本搜索，ParadeDB默认使用BM25排序
+            logger.info("Using text search only with BM25 ranking")
+
+        # 如果还有其他排序条件，添加到后面
         if orderBy and orderBy.fields:
             for field, order in orderBy.fields:
                 order_clause.append(f"{field} {'DESC' if order == 1 else 'ASC'}")
-
+        
         # 构建完整SQL
         sql = f"""
             SELECT {', '.join(select_clause)}
             FROM {indexNames[0]}
             {where_clause}
             {"ORDER BY " + ", ".join(order_clause) if order_clause else ""}
-            {"LIMIT " + str(limit) if limit > 0 else ""}
+            {"LIMIT " + str(vector_topn) if has_vector_search else str(limit) if limit > 0 else ""}
             {"OFFSET " + str(offset) if offset > 0 else ""}
         """
 
@@ -303,6 +356,15 @@ class PDConnection(DocStoreConnection):
                             }
                     
                     return results
+        except psycopg2.errors.UndefinedTable as e:
+            # 表不存在的情况，返回空结果而不是抛出异常
+            logger.warning(f"Table {indexNames[0]} does not exist: {str(e)}")
+            return {
+                "hits": {
+                    "total": 0,
+                    "hits": []
+                }
+            }
         except Exception as e:
             logger.exception(f"PDConnection.search error: {str(e)}")
             raise e
