@@ -94,8 +94,12 @@ class PDConnection(DocStoreConnection):
         """归还连接并记录连接计数"""
         if conn:
             try:
-                self.pool.putconn(conn)
-                self._total_released += 1
+                # 检查连接是否在已使用的连接池中
+                if conn in self.pool._used:
+                    self.pool.putconn(conn)
+                    self._total_released += 1
+                else:
+                    logger.warning("Attempting to return unkeyed connection to pool")
             except Exception as e:
                 logger.error(f"Error returning connection to pool: {str(e)}")
 
@@ -180,15 +184,27 @@ class PDConnection(DocStoreConnection):
         try:
             conn = self._get_connection()
             with conn.cursor() as cur:
-                # 创建更完善的基础表
+                # 创建更完善的表结构，包含与ES兼容的字段
                 cur.execute(f"""
                     CREATE TABLE IF NOT EXISTS {indexName} (
                         id TEXT PRIMARY KEY,
                         kb_id TEXT NOT NULL,
-                        content TEXT,
-                        title TEXT,
-                        metadata JSONB,
-                        available_int INTEGER DEFAULT 1,
+                        doc_id TEXT,                 -- 文档ID
+                        docnm_kwd TEXT,              -- 文档名称(与ES兼容)
+                        content TEXT,                -- 原始内容
+                        content_ltks TEXT,           -- 内容标记(与ES兼容)
+                        content_with_weight TEXT,    -- 带权重内容(与ES兼容)
+                        title TEXT,                  -- 标题
+                        title_tks TEXT,              -- 标题标记(与ES兼容)
+                        important_kwd JSONB,         -- 重要关键词(与ES兼容)
+                        question_kwd JSONB,          -- 问题关键词(与ES兼容)
+                        img_id TEXT,                 -- 图片ID(与ES兼容)
+                        position_int JSONB,          -- 位置信息(与ES兼容)
+                        page_num_int INTEGER,        -- 页码(与ES兼容)
+                        top_int INTEGER,             -- 顶部位置(与ES兼容)
+                        available_int INTEGER DEFAULT 1,  -- 可用标志
+                        create_timestamp_flt FLOAT,  -- 创建时间戳(与ES兼容)
+                        metadata JSONB,              -- 其他元数据
                         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
                         updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
                         embedding vector({vectorSize})
@@ -478,14 +494,16 @@ class PDConnection(DocStoreConnection):
                         }
                 
                 return results
-        except psycopg2.errors.UndefinedTable as e:
-            # 表不存在的情况，返回空结果而不是抛出异常
-            logger.warning(f"Table {indexNames[0]} does not exist: {str(e)}")
+        except psycopg2.errors.UndefinedColumn as e:
+            # 字段不存在的友好错误处理
+            missing_field = str(e).split('"')[1] if '"' in str(e) else "unknown"
+            logger.error(f"Missing column in ParadeDB: {missing_field}")
             return {
                 "hits": {
                     "total": 0,
                     "hits": []
-                }
+                },
+                "error": f"字段 '{missing_field}' 不存在，请检查数据库结构或更新应用"
             }
         except Exception as e:
             logger.exception(f"PDConnection.search error: {str(e)}")
@@ -533,17 +551,14 @@ class PDConnection(DocStoreConnection):
                         # 从副本中提取id
                         doc_id = doc_copy.pop("id", "")
                         doc_copy["kb_id"] = knowledgebaseId
-
-                        # 过滤掉不在表结构中的字段
-                        valid_fields = ["kb_id", "content", "title", "metadata", 
-                                      "available_int", "embedding"]
-                        filtered_doc = {k: v for k, v in doc_copy.items() if k in valid_fields}
-
-                        fields = ", ".join(filtered_doc.keys())
-                        placeholders = ", ".join(["%s"] * len(filtered_doc))
                         
-                        # 构建UPDATE部分 - 使用单独的字段赋值而不是列表
-                        update_clause = ", ".join([f"{k} = EXCLUDED.{k}" for k in filtered_doc.keys()])
+                        # 不再过滤字段，保留所有ES兼容字段
+                        # 构建SQL的字段列表和占位符
+                        fields = ", ".join(doc_copy.keys())
+                        placeholders = ", ".join(["%s"] * len(doc_copy))
+                        
+                        # 构建UPDATE部分
+                        update_clause = ", ".join([f"{k} = EXCLUDED.{k}" for k in doc_copy.keys()])
 
                         sql = f"""
                             INSERT INTO {indexName} (id, {fields})
@@ -552,11 +567,10 @@ class PDConnection(DocStoreConnection):
                             SET {update_clause}
                         """
 
-                        cur.execute(sql, [doc_id] + list(filtered_doc.values()))
+                        cur.execute(sql, [doc_id] + list(doc_copy.values()))
                     except Exception as e:
                         errors.append(f"{doc.get('id', 'unknown')}:{str(e)}")
                         logger.error(f"Insert error for doc {doc.get('id', 'unknown')}: {str(e)}")
-                        # 回滚当前事务，避免整个批次失败
                         conn.rollback()
                         continue
 
