@@ -65,6 +65,30 @@ services:
       retries: 120
     restart: on-failure
 
+  paradedb:
+    container_name: ragflow-paradedb
+    profiles:
+      - paradedb
+    image: paradedb/paradedb:latest
+    volumes:
+      - paradedb_data:/var/lib/postgresql/data
+    ports:
+      - ${PARADEDB_PORT}:5432
+    env_file: .env
+    environment:
+      - POSTGRES_USER=${PARADEDB_USER}
+      - POSTGRES_PASSWORD=${PARADEDB_PASSWORD}
+      - POSTGRES_DB=${PARADEDB_DBNAME}
+      - TZ=${TIMEZONE}
+    mem_limit: ${MEM_LIMIT}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PARADEDB_USER} -d ${PARADEDB_DBNAME}"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    networks:
+      - ragflow
+    restart: on-failure
 
   mysql:
     # mysql:5.7 linux/arm64 image is unavailable.
@@ -128,8 +152,6 @@ services:
       - ragflow
     restart: on-failure
 
-
-
 volumes:
   esdata01:
     driver: local
@@ -140,6 +162,8 @@ volumes:
   minio_data:
     driver: local
   redis_data:
+    driver: local
+  paradedb_data:
     driver: local
 
 networks:
