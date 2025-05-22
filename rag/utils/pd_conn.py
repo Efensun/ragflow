@@ -304,14 +304,31 @@ class PDConnection(DocStoreConnection):
                 order_clause.append(f"{field} {'DESC' if order == 1 else 'ASC'}")
         
         # 构建完整SQL
+        # 确保SQL语法正确
+        select_part = f"SELECT {', '.join(select_clause)}"
+        from_part = f"FROM {indexNames[0]}"
+        
+        # 添加限制条件
+        limit_clause = ""
+        if has_vector_search:
+            limit_clause = f"LIMIT {vector_topn}"
+        elif limit > 0:
+            limit_clause = f"LIMIT {limit}"
+            
+        offset_clause = f"OFFSET {offset}" if offset > 0 else ""
+        order_by_clause = f"ORDER BY {', '.join(order_clause)}" if order_clause else ""
+        
+        # 构建完整SQL - 确保每个部分都有正确的关键字
         sql = f"""
-            SELECT {', '.join(select_clause)}
-            FROM {indexNames[0]}
+            {select_part}
+            {from_part}
             {where_clause}
-            {"ORDER BY " + ", ".join(order_clause) if order_clause else ""}
-            {"LIMIT " + str(vector_topn) if has_vector_search else str(limit) if limit > 0 else ""}
-            {"OFFSET " + str(offset) if offset > 0 else ""}
+            {order_by_clause}
+            {limit_clause}
+            {offset_clause}
         """
+        
+        logger.debug(f"Generated SQL: {sql}")
 
         try:
             with self.pool.getconn() as conn:
