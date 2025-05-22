@@ -26,14 +26,14 @@ from rag.utils.doc_store_conn import DocStoreConnection, MatchExpr, OrderByExpr,
     FusionExpr
 
 ATTEMPT_TIME = 2
-logger = logging.getLogger('ragflow.pg_conn')
+logger = logging.getLogger('ragflow.pd_conn')
 
 
 @singleton
-class PGConnection(DocStoreConnection):
+class PDConnection(DocStoreConnection):
     def __init__(self):
         self.info = {}
-        logger.info(f"Use ParadeDB {settings.PG['host']} as the doc engine.")
+        logger.info(f"Use ParadeDB {settings.PARADEDB['host']} as the doc engine.")
 
         for _ in range(ATTEMPT_TIME):
             try:
@@ -41,11 +41,11 @@ class PGConnection(DocStoreConnection):
                 self.pool = SimpleConnectionPool(
                     minconn=1,
                     maxconn=10,
-                    host=settings.PG["host"],
-                    port=settings.PG["port"],
-                    database=settings.PG["database"],
-                    user=settings.PG["user"],
-                    password=settings.PG["password"]
+                    host=settings.PARADEDB["host"],
+                    port=settings.PARADEDB["port"],
+                    database=settings.PARADEDB.get("database", settings.PARADEDB.get("name", "rag_flow")),
+                    user=settings.PARADEDB["user"],
+                    password=settings.PARADEDB["password"]
                 )
 
                 # 测试连接
@@ -56,15 +56,15 @@ class PGConnection(DocStoreConnection):
                     self.pool.putconn(conn)
                 break
             except Exception as e:
-                logger.warning(f"{str(e)}. Waiting ParadeDB {settings.PG['host']} to be healthy.")
+                logger.warning(f"{str(e)}. Waiting ParadeDB {settings.PARADEDB['host']} to be healthy.")
                 time.sleep(5)
 
         if not self.info:
-            msg = f"ParadeDB {settings.PG['host']} is unhealthy in 120s."
+            msg = f"ParadeDB {settings.PARADEDB['host']} is unhealthy in 120s."
             logger.error(msg)
             raise Exception(msg)
 
-        logger.info(f"ParadeDB {settings.PG['host']} is healthy.")
+        logger.info(f"ParadeDB {settings.PARADEDB['host']} is healthy.")
 
     """
     Database operations
@@ -160,7 +160,7 @@ class PGConnection(DocStoreConnection):
                     conn.commit()
                     return True
         except Exception as e:
-            logger.exception(f"PGConnection.createIdx error {indexName}: {str(e)}")
+            logger.exception(f"PDConnection.createIdx error {indexName}: {str(e)}")
             return False
 
     def deleteIdx(self, indexName: str, knowledgebaseId: str):
@@ -175,7 +175,7 @@ class PGConnection(DocStoreConnection):
                     cur.execute(f"DROP TABLE IF EXISTS {indexName}")
                     conn.commit()
         except Exception:
-            logger.exception(f"PGConnection.deleteIdx error {indexName}")
+            logger.exception(f"PDConnection.deleteIdx error {indexName}")
 
     def indexExist(self, indexName: str, knowledgebaseId: str = None) -> bool:
         try:
@@ -189,7 +189,7 @@ class PGConnection(DocStoreConnection):
                     """, (indexName,))
                     return cur.fetchone()[0]
         except Exception:
-            logger.exception("PGConnection.indexExist got exception")
+            logger.exception("PDConnection.indexExist got exception")
             return False
 
     """
@@ -303,7 +303,7 @@ class PGConnection(DocStoreConnection):
                     
                     return results
         except Exception as e:
-            logger.exception(f"PGConnection.search error: {str(e)}")
+            logger.exception(f"PDConnection.search error: {str(e)}")
             raise e
 
     def get(self, chunkId: str, indexName: str, knowledgebaseIds: list[str]) -> dict | None:
@@ -319,7 +319,7 @@ class PGConnection(DocStoreConnection):
                         return dict(result)
                     return None
         except Exception:
-            logger.exception(f"PGConnection.get({chunkId}) got exception")
+            logger.exception(f"PDConnection.get({chunkId}) got exception")
             return None
 
     def insert(self, documents: list[dict], indexName: str, knowledgebaseId: str = None) -> list[str]:
@@ -349,7 +349,7 @@ class PGConnection(DocStoreConnection):
                     conn.commit()
             return errors
         except Exception as e:
-            logger.exception("PGConnection.insert got exception")
+            logger.exception("PDConnection.insert got exception")
             return [str(e)]
 
     def update(self, condition: dict, newValue: dict, indexName: str, knowledgebaseId: str) -> bool:
@@ -383,7 +383,7 @@ class PGConnection(DocStoreConnection):
                     conn.commit()
                     return True
         except Exception:
-            logger.exception("PGConnection.update got exception")
+            logger.exception("PDConnection.update got exception")
             return False
 
     def delete(self, condition: dict, indexName: str, knowledgebaseId: str) -> int:
@@ -412,7 +412,7 @@ class PGConnection(DocStoreConnection):
                     conn.commit()
                     return deleted
         except Exception:
-            logger.exception("PGConnection.delete got exception")
+            logger.exception("PDConnection.delete got exception")
             return 0
 
     """

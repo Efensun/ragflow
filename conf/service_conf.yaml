@@ -25,14 +25,25 @@ redis:
   password: 'infini_rag_flow'
   host: 'localhost:6379'
 
-# postgres:
-#   name: 'rag_flow'
-#   user: 'rag_flow'
-#   password: 'infini_rag_flow'
-#   host: 'postgres'
-#   port: 5432
-#   max_connections: 100
-#   stale_timeout: 30
+paradedb:
+  name: 'rag_flow'
+  user: 'postgres'
+  password: 'infini_rag_flow'
+  host: 'localhost'
+  port: 5432
+  database: 'rag_flow'
+  max_connections: 100
+  stale_timeout: 30
+
+
+#postgres:
+#  name: 'rag_flow'
+#  user: 'rag_flow'
+#  password: 'infini_rag_flow'
+#  host: 'postgres'
+#  port: 5432
+#  max_connections: 100
+#  stale_timeout: 30
 # s3:
 #   access_key: 'access_key'
 #   secret_key: 'secret_key'
