@@ -133,7 +133,7 @@ class PDConnection(DocStoreConnection):
                     
                     # 创建BM25索引 - 用于全文搜索
                     cur.execute(f"""
-                        CREATE INDEX {indexName}_bm25 ON {indexName}
+                        CREATE INDEX IF NOT EXISTS {indexName}_bm25 ON {indexName}
                         USING bm25 (id, content, title, kb_id, available_int, metadata)
                         WITH (key_field='id');
                     """)
@@ -392,11 +392,20 @@ class PDConnection(DocStoreConnection):
                 with conn.cursor() as cur:
                     for doc in documents:
                         try:
+                            # 处理字段映射，将doc_id转为id
+                            if "doc_id" in doc and "id" not in doc:
+                                doc["id"] = doc.pop("doc_id")
+                                
                             doc_id = doc.pop("id", "")
                             doc["kb_id"] = knowledgebaseId
 
-                            fields = ", ".join(doc.keys())
-                            placeholders = ", ".join(["%s"] * len(doc))
+                            # 过滤掉不在表结构中的字段
+                            valid_fields = ["kb_id", "content", "title", "metadata", 
+                                          "available_int", "embedding"]
+                            filtered_doc = {k: v for k, v in doc.items() if k in valid_fields}
+
+                            fields = ", ".join(filtered_doc.keys())
+                            placeholders = ", ".join(["%s"] * len(filtered_doc))
 
                             sql = f"""
                                 INSERT INTO {indexName} (id, {fields})
@@ -405,14 +414,15 @@ class PDConnection(DocStoreConnection):
                                 SET ({fields}) = ({placeholders})
                             """
 
-                            cur.execute(sql, [doc_id] + list(doc.values()) * 2)
+                            cur.execute(sql, [doc_id] + list(filtered_doc.values()) * 2)
                         except Exception as e:
                             errors.append(f"{doc_id}:{str(e)}")
+                            logger.error(f"Insert error for doc {doc_id}: {str(e)}")
 
                     conn.commit()
             return errors
         except Exception as e:
-            logger.exception("PDConnection.insert got exception")
+            logger.exception(f"PDConnection.insert got exception: {str(e)}")
             return [str(e)]
 
     def update(self, condition: dict, newValue: dict, indexName: str, knowledgebaseId: str) -> bool:
