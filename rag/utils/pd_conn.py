@@ -24,6 +24,7 @@ from rag import settings
 from rag.utils import singleton
 from rag.utils.doc_store_conn import DocStoreConnection, MatchExpr, OrderByExpr, MatchTextExpr, MatchDenseExpr, \
     FusionExpr
+import re
 
 ATTEMPT_TIME = 2
 logger = logging.getLogger('ragflow.pd_conn')
@@ -456,6 +457,84 @@ class PDConnection(DocStoreConnection):
         
         buckets = res["aggregations"][agg_field]["buckets"]
         return [(b["key"], b["doc_count"]) for b in buckets]
+
+    """
+    SQL 执行方法
+    """
+    def sql(self, sql: str, fetch_size: int, format: str):
+        """
+        执行SQL查询并返回结果
+        """
+        logger.debug(f"PDConnection.sql get sql: {sql}")
+        
+        # SQL预处理 - 类似ES实现的规范化
+        sql = re.sub(r"[ `]+", " ", sql)
+        sql = sql.replace("%", "")
+        
+        # 处理全文搜索优化 - 将LIKE转换为ParadeDB的全文搜索语法
+        # 示例: content_ltks LIKE '%word%' => content_ltks @@@ 'word'
+        replaces = []
+        for r in re.finditer(r" ([a-z_]+_l?tks)( like | ?= ?)'([^']+)'", sql):
+            fld, v = r.group(1), r.group(3)
+            # 使用ParadeDB的BM25全文搜索
+            match = " {} @@@ '{}' ".format(fld, v.replace('%', '').strip())
+            replaces.append(
+                ("{}{}'{}'".format(
+                    r.group(1),
+                    r.group(2),
+                    r.group(3)),
+                 match))
+
+        for p, r in replaces:
+            sql = sql.replace(p, r, 1)
+            
+        logger.debug(f"PDConnection.sql to paradedb: {sql}")
+        
+        # 添加重试机制
+        for i in range(ATTEMPT_TIME):
+            try:
+                with self.pool.getconn() as conn:
+                    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                        cur.execute(sql)
+                        
+                        if format == "json":
+                            # 获取所有列名
+                            columns = [{"name": desc[0], "type": "text"} for desc in cur.description]
+                            
+                            # 获取结果行
+                            rows = cur.fetchmany(fetch_size)
+                            
+                            # 构建与ES兼容的响应格式
+                            result = {
+                                "columns": columns,
+                                "rows": [[row[col["name"]] for col in columns] for row in rows],
+                                "cursor": None  # ParadeDB不支持游标，设为None
+                            }
+                            
+                            return result
+                        else:
+                            # 返回默认格式
+                            return {"results": [dict(row) for row in cur.fetchmany(fetch_size)]}
+            except psycopg2.OperationalError as e:
+                # 连接超时处理
+                logger.warning(f"PDConnection.sql connection timeout: {str(e)}")
+                if i < ATTEMPT_TIME - 1:  # 如果不是最后一次尝试
+                    time.sleep(3)  # 等待一段时间再重试
+                    continue
+                return {"error": f"Connection error: {str(e)}"}
+            except Exception as e:
+                logger.exception(f"PDConnection.sql error: {str(e)}")
+                # 提供详细错误信息
+                error_msg = str(e)
+                if "syntax error" in error_msg.lower():
+                    error_msg = f"SQL语法错误: {error_msg}"
+                elif "does not exist" in error_msg.lower():
+                    error_msg = f"表或字段不存在: {error_msg}"
+                return {"error": error_msg}
+        
+        # 所有尝试都失败
+        logger.error("PDConnection.sql timeout for all attempts!")
+        return {"error": "查询超时，请稍后重试"}
 
     def __del__(self):
         if hasattr(self, 'pool'):
