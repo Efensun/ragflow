@@ -25,6 +25,7 @@ from rag.utils import singleton
 from rag.utils.doc_store_conn import DocStoreConnection, MatchExpr, OrderByExpr, MatchTextExpr, MatchDenseExpr, \
     FusionExpr
 import re
+import copy
 
 ATTEMPT_TIME = 2
 logger = logging.getLogger('ragflow.pd_conn')
@@ -392,19 +393,22 @@ class PDConnection(DocStoreConnection):
                 with conn.cursor() as cur:
                     for doc in documents:
                         try:
-                            # 处理字段映射，将doc_id转为id
-                            if "doc_id" in doc and "id" not in doc:
-                                doc["id"] = doc.pop("doc_id")
+                            # 确保文档有id字段
+                            if "id" not in doc and "doc_id" in doc:
+                                doc["id"] = doc["doc_id"]
                                 
-                            doc_id = doc.pop("id", "")
-                            doc["kb_id"] = knowledgebaseId
+                            # 创建文档副本而不是修改原始文档
+                            doc_copy = copy.deepcopy(doc)
+                            
+                            # 从副本中提取id
+                            doc_id = doc_copy.pop("id", "")
+                            doc_copy["kb_id"] = knowledgebaseId
 
                             # 过滤掉不在表结构中的字段
                             valid_fields = ["kb_id", "content", "title", "metadata", 
                                           "available_int", "embedding"]
-                            filtered_doc = {k: v for k, v in doc.items() if k in valid_fields}
+                            filtered_doc = {k: v for k, v in doc_copy.items() if k in valid_fields}
 
-                            # 构建INSERT部分
                             fields = ", ".join(filtered_doc.keys())
                             placeholders = ", ".join(["%s"] * len(filtered_doc))
                             
@@ -420,8 +424,8 @@ class PDConnection(DocStoreConnection):
 
                             cur.execute(sql, [doc_id] + list(filtered_doc.values()))
                         except Exception as e:
-                            errors.append(f"{doc_id}:{str(e)}")
-                            logger.error(f"Insert error for doc {doc_id}: {str(e)}")
+                            errors.append(f"{doc.get('id', 'unknown')}:{str(e)}")
+                            logger.error(f"Insert error for doc {doc.get('id', 'unknown')}: {str(e)}")
                             # 回滚当前事务，避免整个批次失败
                             conn.rollback()
                             continue
