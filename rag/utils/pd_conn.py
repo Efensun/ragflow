@@ -37,12 +37,18 @@ class PDConnection(DocStoreConnection):
         self.info = {}
         logger.info(f"Use ParadeDB {settings.PARADEDB['host']} as the doc engine.")
 
+        # 连接池状态监控变量
+        self._total_acquired = 0
+        self._total_released = 0
+        self._last_connection_check = time.time()
+        self._connection_check_interval = 60  # 每60秒检查一次连接状态
+
         for _ in range(ATTEMPT_TIME):
             try:
-                # 创建连接池
+                # 创建连接池 - 增加最大连接数
                 self.pool = SimpleConnectionPool(
                     minconn=1,
-                    maxconn=10,
+                    maxconn=settings.PARADEDB.get("max_connections", 50),  # 默认提高到50
                     host=settings.PARADEDB["host"],
                     port=settings.PARADEDB["port"],
                     database=settings.PARADEDB.get("database", settings.PARADEDB.get("name", "rag_flow")),
@@ -51,11 +57,14 @@ class PDConnection(DocStoreConnection):
                 )
 
                 # 测试连接
-                with self.pool.getconn() as conn:
+                conn = self._get_connection()
+                try:
                     with conn.cursor() as cur:
                         cur.execute("SELECT version()")
                         self.info["version"] = cur.fetchone()[0]
-                    self.pool.putconn(conn)
+                finally:
+                    # 确保测试连接归还到池中
+                    self._return_connection(conn)
                 break
             except Exception as e:
                 logger.warning(f"{str(e)}. Waiting ParadeDB {settings.PARADEDB['host']} to be healthy.")
@@ -68,6 +77,70 @@ class PDConnection(DocStoreConnection):
 
         logger.info(f"ParadeDB {settings.PARADEDB['host']} is healthy.")
 
+    def _get_connection(self):
+        """获取连接并记录连接计数"""
+        self._check_connection_pool()
+        try:
+            conn = self.pool.getconn()
+            self._total_acquired += 1
+            return ManagedConnection(self, conn)
+        except psycopg2.pool.PoolError as e:
+            # 如果池已耗尽，尝试重置连接池
+            logger.error(f"Connection pool error: {str(e)}. Trying to reset connections.")
+            self._reset_connection_pool()
+            return ManagedConnection(self, self.pool.getconn())
+
+    def _return_connection(self, conn):
+        """归还连接并记录连接计数"""
+        if conn:
+            try:
+                self.pool.putconn(conn)
+                self._total_released += 1
+            except Exception as e:
+                logger.error(f"Error returning connection to pool: {str(e)}")
+
+    def _check_connection_pool(self):
+        """检查连接池状态，如果发现泄漏则尝试修复"""
+        now = time.time()
+        if now - self._last_connection_check > self._connection_check_interval:
+            self._last_connection_check = now
+            
+            # 计算未释放的连接数
+            leaked = self._total_acquired - self._total_released
+            
+            # 记录连接池状态
+            logger.info(f"Connection pool status: acquired={self._total_acquired}, released={self._total_released}, leaked={leaked}, used={self.pool._used}")
+            
+            # 如果泄漏连接太多，尝试重置连接池
+            if leaked > 10:
+                logger.warning(f"Detected {leaked} leaked connections. Attempting to reset connection pool.")
+                self._reset_connection_pool()
+
+    def _reset_connection_pool(self):
+        """尝试关闭所有连接并重置连接池"""
+        try:
+            # 关闭所有连接
+            self.pool.closeall()
+            
+            # 创建新的连接池
+            self.pool = SimpleConnectionPool(
+                minconn=1,
+                maxconn=settings.PARADEDB.get("max_connections", 50),
+                host=settings.PARADEDB["host"],
+                port=settings.PARADEDB["port"],
+                database=settings.PARADEDB.get("database", settings.PARADEDB.get("name", "rag_flow")),
+                user=settings.PARADEDB["user"],
+                password=settings.PARADEDB["password"]
+            )
+            
+            # 重置计数器
+            self._total_acquired = 0
+            self._total_released = 0
+            
+            logger.info("Connection pool has been reset successfully.")
+        except Exception as e:
+            logger.error(f"Failed to reset connection pool: {str(e)}")
+
     """
     Database operations
     """
@@ -76,7 +149,9 @@ class PDConnection(DocStoreConnection):
         return "paradedb"
 
     def health(self) -> dict:
-        with self.pool.getconn() as conn:
+        conn = None
+        try:
+            conn = self._get_connection()
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute("""
                     SELECT * FROM pg_stat_database 
@@ -84,106 +159,134 @@ class PDConnection(DocStoreConnection):
                 """)
                 health_dict = dict(cur.fetchone())
                 health_dict["type"] = "paradedb"
+                # 添加连接池状态信息
+                health_dict["pool_acquired"] = self._total_acquired
+                health_dict["pool_released"] = self._total_released
+                health_dict["pool_used"] = len(self.pool._used)
                 return health_dict
+        except Exception as e:
+            logger.exception(f"PDConnection.health got exception: {str(e)}")
+            return {"type": "paradedb", "status": "error", "error": str(e)}
+        finally:
+            if conn:
+                self._return_connection(conn)
 
     """
     Table operations
     """
 
     def createIdx(self, indexName: str, knowledgebaseId: str, vectorSize: int):
+        conn = None
         try:
-            with self.pool.getconn() as conn:
-                with conn.cursor() as cur:
-                    # 创建更完善的基础表
-                    cur.execute(f"""
-                        CREATE TABLE IF NOT EXISTS {indexName} (
-                            id TEXT PRIMARY KEY,
-                            kb_id TEXT NOT NULL,
-                            content TEXT,
-                            title TEXT,
-                            metadata JSONB,
-                            available_int INTEGER DEFAULT 1,
-                            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                            updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                            embedding vector({vectorSize})
-                        )
-                    """)
-                    
-                    # 创建触发器自动更新 updated_at 字段
-                    cur.execute(f"""
-                        CREATE OR REPLACE FUNCTION update_modified_column()
-                        RETURNS TRIGGER AS $$
-                        BEGIN
-                            NEW.updated_at = CURRENT_TIMESTAMP;
-                            RETURN NEW;
-                        END;
-                        $$ language 'plpgsql';
-                    """)
-                    
-                    cur.execute(f"""
-                        DROP TRIGGER IF EXISTS update_{indexName}_timestamp ON {indexName};
-                        CREATE TRIGGER update_{indexName}_timestamp
-                        BEFORE UPDATE ON {indexName}
-                        FOR EACH ROW EXECUTE FUNCTION update_modified_column();
-                    """)
-                    
-                    # 创建 kb_id 索引 - 提高按知识库过滤性能
-                    cur.execute(f"""
-                        CREATE INDEX IF NOT EXISTS {indexName}_kb_id_idx ON {indexName} (kb_id);
-                    """)
-                    
-                    # 创建BM25索引 - 用于全文搜索
-                    cur.execute(f"""
-                        CREATE INDEX IF NOT EXISTS {indexName}_bm25 ON {indexName}
-                        USING bm25 (id, content, title, kb_id, available_int, metadata)
-                        WITH (key_field='id');
-                    """)
-                    
-                    # 创建向量索引 - 用于向量相似度搜索
-                    cur.execute(f"""
-                        CREATE INDEX IF NOT EXISTS {indexName}_vector_idx 
-                        ON {indexName} 
-                        USING hnsw (embedding vector_cosine_ops)
-                        WITH (
-                            m = 16,               -- 每个节点的最大连接数
-                            ef_construction = 64  -- 构建时的搜索宽度，越大越精确但也越慢
-                        )
-                    """)
-                    
-                    conn.commit()
-                    return True
+            conn = self._get_connection()
+            with conn.cursor() as cur:
+                # 创建更完善的基础表
+                cur.execute(f"""
+                    CREATE TABLE IF NOT EXISTS {indexName} (
+                        id TEXT PRIMARY KEY,
+                        kb_id TEXT NOT NULL,
+                        content TEXT,
+                        title TEXT,
+                        metadata JSONB,
+                        available_int INTEGER DEFAULT 1,
+                        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                        embedding vector({vectorSize})
+                    )
+                """)
+                
+                # 创建触发器自动更新 updated_at 字段
+                cur.execute(f"""
+                    CREATE OR REPLACE FUNCTION update_modified_column()
+                    RETURNS TRIGGER AS $$
+                    BEGIN
+                        NEW.updated_at = CURRENT_TIMESTAMP;
+                        RETURN NEW;
+                    END;
+                    $$ language 'plpgsql';
+                """)
+                
+                cur.execute(f"""
+                    DROP TRIGGER IF EXISTS update_{indexName}_timestamp ON {indexName};
+                    CREATE TRIGGER update_{indexName}_timestamp
+                    BEFORE UPDATE ON {indexName}
+                    FOR EACH ROW EXECUTE FUNCTION update_modified_column();
+                """)
+                
+                # 创建 kb_id 索引 - 提高按知识库过滤性能
+                cur.execute(f"""
+                    CREATE INDEX IF NOT EXISTS {indexName}_kb_id_idx ON {indexName} (kb_id);
+                """)
+                
+                # 创建BM25索引 - 用于全文搜索
+                cur.execute(f"""
+                    CREATE INDEX IF NOT EXISTS {indexName}_bm25 ON {indexName}
+                    USING bm25 (id, content, title, kb_id, available_int, metadata)
+                    WITH (key_field='id');
+                """)
+                
+                # 创建向量索引 - 用于向量相似度搜索
+                cur.execute(f"""
+                    CREATE INDEX IF NOT EXISTS {indexName}_vector_idx 
+                    ON {indexName} 
+                    USING hnsw (embedding vector_cosine_ops)
+                    WITH (
+                        m = 16,               -- 每个节点的最大连接数
+                        ef_construction = 64  -- 构建时的搜索宽度，越大越精确但也越慢
+                    )
+                """)
+                
+                conn.commit()
+                logger.info(f"Creating index with name: {indexName}")
+                # 创建后验证
+                if self.indexExist(indexName):
+                    logger.info(f"Successfully created and verified index: {indexName}")
+                else:
+                    logger.error(f"Failed to verify index after creation: {indexName}")
+                return True
         except Exception as e:
             logger.exception(f"PDConnection.createIdx error {indexName}: {str(e)}")
             return False
+        finally:
+            if conn:
+                self._return_connection(conn)
 
     def deleteIdx(self, indexName: str, knowledgebaseId: str):
+        conn = None
         try:
-            with self.pool.getconn() as conn:
-                with conn.cursor() as cur:
-                    # 删除BM25索引
-                    cur.execute(f"DROP INDEX IF EXISTS {indexName}_bm25")
-                    # 删除向量索引
-                    cur.execute(f"DROP INDEX IF EXISTS {indexName}_vector_idx")
-                    # 删除表
-                    cur.execute(f"DROP TABLE IF EXISTS {indexName}")
-                    conn.commit()
-        except Exception:
-            logger.exception(f"PDConnection.deleteIdx error {indexName}")
+            conn = self._get_connection()
+            with conn.cursor() as cur:
+                # 删除BM25索引
+                cur.execute(f"DROP INDEX IF EXISTS {indexName}_bm25")
+                # 删除向量索引
+                cur.execute(f"DROP INDEX IF EXISTS {indexName}_vector_idx")
+                # 删除表
+                cur.execute(f"DROP TABLE IF EXISTS {indexName}")
+                conn.commit()
+        except Exception as e:
+            logger.exception(f"PDConnection.deleteIdx error {indexName}: {str(e)}")
+        finally:
+            if conn:
+                self._return_connection(conn)
 
     def indexExist(self, indexName: str, knowledgebaseId: str = None) -> bool:
+        conn = None
         try:
-            with self.pool.getconn() as conn:
-                with conn.cursor() as cur:
-                    cur.execute("""
-                        SELECT EXISTS (
-                            SELECT FROM information_schema.tables 
-                            WHERE table_name = %s
-                        )
-                    """, (indexName,))
-                    return cur.fetchone()[0]
-        except Exception:
-            logger.exception("PDConnection.indexExist got exception")
+            conn = self._get_connection()
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.tables 
+                        WHERE table_name = %s
+                    )
+                """, (indexName,))
+                return cur.fetchone()[0]
+        except Exception as e:
+            logger.exception(f"PDConnection.indexExist got exception: {str(e)}")
             return False
+        finally:
+            if conn:
+                self._return_connection(conn)
 
     """
     CRUD operations
@@ -330,50 +433,51 @@ class PDConnection(DocStoreConnection):
         
         logger.debug(f"Generated SQL: {sql}")
 
+        conn = None
         try:
-            with self.pool.getconn() as conn:
-                with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                    # 执行主查询
-                    cur.execute(sql, params)
-                    results = {
-                        "hits": {
-                            "total": cur.rowcount,
-                            "hits": cur.fetchall()
-                        }
+            conn = self._get_connection()
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                # 执行主查询
+                cur.execute(sql, params)
+                results = {
+                    "hits": {
+                        "total": cur.rowcount,
+                        "hits": cur.fetchall()
                     }
+                }
 
-                    # 如果需要聚合字段，执行聚合查询
-                    if aggFields:
-                        results["aggregations"] = {}
-                        
-                        for field in aggFields:
-                            # 构建聚合查询
-                            agg_sql = f"""
-                                SELECT {field}, COUNT(*) as doc_count
-                                FROM {indexNames[0]}
-                                {where_clause}
-                                GROUP BY {field}
-                                ORDER BY doc_count DESC
-                            """
-                            
-                            # 执行聚合查询
-                            cur.execute(agg_sql, params)
-                            
-                            # 构建与ES兼容的聚合结果格式
-                            buckets = []
-                            for row in cur.fetchall():
-                                if row[field] is not None:  # 忽略NULL值
-                                    buckets.append({
-                                        "key": row[field],
-                                        "doc_count": row["doc_count"]
-                                    })
-                            
-                            # 将聚合结果添加到响应中
-                            results["aggregations"][f"aggs_{field}"] = {
-                                "buckets": buckets
-                            }
+                # 如果需要聚合字段，执行聚合查询
+                if aggFields:
+                    results["aggregations"] = {}
                     
-                    return results
+                    for field in aggFields:
+                        # 构建聚合查询
+                        agg_sql = f"""
+                            SELECT {field}, COUNT(*) as doc_count
+                            FROM {indexNames[0]}
+                            {where_clause}
+                            GROUP BY {field}
+                            ORDER BY doc_count DESC
+                        """
+                        
+                        # 执行聚合查询
+                        cur.execute(agg_sql, params)
+                        
+                        # 构建与ES兼容的聚合结果格式
+                        buckets = []
+                        for row in cur.fetchall():
+                            if row[field] is not None:  # 忽略NULL值
+                                buckets.append({
+                                    "key": row[field],
+                                    "doc_count": row["doc_count"]
+                                })
+                        
+                        # 将聚合结果添加到响应中
+                        results["aggregations"][f"aggs_{field}"] = {
+                            "buckets": buckets
+                        }
+                
+                return results
         except psycopg2.errors.UndefinedTable as e:
             # 表不存在的情况，返回空结果而不是抛出异常
             logger.warning(f"Table {indexNames[0]} does not exist: {str(e)}")
@@ -386,135 +490,155 @@ class PDConnection(DocStoreConnection):
         except Exception as e:
             logger.exception(f"PDConnection.search error: {str(e)}")
             raise e
+        finally:
+            # 确保连接被归还到连接池
+            if conn:
+                self._return_connection(conn)
 
     def get(self, chunkId: str, indexName: str, knowledgebaseIds: list[str]) -> dict | None:
+        conn = None
         try:
-            with self.pool.getconn() as conn:
-                with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                    cur.execute(f"""
-                        SELECT * FROM {indexName} 
-                        WHERE id = %s AND kb_id = ANY(%s)
-                    """, (chunkId, knowledgebaseIds))
-                    result = cur.fetchone()
-                    if result:
-                        return dict(result)
-                    return None
-        except Exception:
-            logger.exception(f"PDConnection.get({chunkId}) got exception")
+            conn = self._get_connection()
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(f"""
+                    SELECT * FROM {indexName} 
+                    WHERE id = %s AND kb_id = ANY(%s)
+                """, (chunkId, knowledgebaseIds))
+                result = cur.fetchone()
+                if result:
+                    return dict(result)
+                return None
+        except Exception as e:
+            logger.exception(f"PDConnection.get({chunkId}) got exception: {str(e)}")
             return None
+        finally:
+            if conn:
+                self._return_connection(conn)
 
     def insert(self, documents: list[dict], indexName: str, knowledgebaseId: str = None) -> list[str]:
         errors = []
+        conn = None
         try:
-            with self.pool.getconn() as conn:
-                with conn.cursor() as cur:
-                    for doc in documents:
-                        try:
-                            # 确保文档有id字段
-                            if "id" not in doc and "doc_id" in doc:
-                                doc["id"] = doc["doc_id"]
-                                
-                            # 创建文档副本而不是修改原始文档
-                            doc_copy = copy.deepcopy(doc)
+            conn = self._get_connection()
+            with conn.cursor() as cur:
+                for doc in documents:
+                    try:
+                        # 确保文档有id字段
+                        if "id" not in doc and "doc_id" in doc:
+                            doc["id"] = doc["doc_id"]
                             
-                            # 从副本中提取id
-                            doc_id = doc_copy.pop("id", "")
-                            doc_copy["kb_id"] = knowledgebaseId
+                        # 创建文档副本而不是修改原始文档
+                        doc_copy = copy.deepcopy(doc)
+                        
+                        # 从副本中提取id
+                        doc_id = doc_copy.pop("id", "")
+                        doc_copy["kb_id"] = knowledgebaseId
 
-                            # 过滤掉不在表结构中的字段
-                            valid_fields = ["kb_id", "content", "title", "metadata", 
-                                          "available_int", "embedding"]
-                            filtered_doc = {k: v for k, v in doc_copy.items() if k in valid_fields}
+                        # 过滤掉不在表结构中的字段
+                        valid_fields = ["kb_id", "content", "title", "metadata", 
+                                      "available_int", "embedding"]
+                        filtered_doc = {k: v for k, v in doc_copy.items() if k in valid_fields}
 
-                            fields = ", ".join(filtered_doc.keys())
-                            placeholders = ", ".join(["%s"] * len(filtered_doc))
-                            
-                            # 构建UPDATE部分 - 使用单独的字段赋值而不是列表
-                            update_clause = ", ".join([f"{k} = EXCLUDED.{k}" for k in filtered_doc.keys()])
+                        fields = ", ".join(filtered_doc.keys())
+                        placeholders = ", ".join(["%s"] * len(filtered_doc))
+                        
+                        # 构建UPDATE部分 - 使用单独的字段赋值而不是列表
+                        update_clause = ", ".join([f"{k} = EXCLUDED.{k}" for k in filtered_doc.keys()])
 
-                            sql = f"""
-                                INSERT INTO {indexName} (id, {fields})
-                                VALUES (%s, {placeholders})
-                                ON CONFLICT (id) DO UPDATE
-                                SET {update_clause}
-                            """
+                        sql = f"""
+                            INSERT INTO {indexName} (id, {fields})
+                            VALUES (%s, {placeholders})
+                            ON CONFLICT (id) DO UPDATE
+                            SET {update_clause}
+                        """
 
-                            cur.execute(sql, [doc_id] + list(filtered_doc.values()))
-                        except Exception as e:
-                            errors.append(f"{doc.get('id', 'unknown')}:{str(e)}")
-                            logger.error(f"Insert error for doc {doc.get('id', 'unknown')}: {str(e)}")
-                            # 回滚当前事务，避免整个批次失败
-                            conn.rollback()
-                            continue
+                        cur.execute(sql, [doc_id] + list(filtered_doc.values()))
+                    except Exception as e:
+                        errors.append(f"{doc.get('id', 'unknown')}:{str(e)}")
+                        logger.error(f"Insert error for doc {doc.get('id', 'unknown')}: {str(e)}")
+                        # 回滚当前事务，避免整个批次失败
+                        conn.rollback()
+                        continue
 
-                    conn.commit()
+                conn.commit()
             return errors
         except Exception as e:
             logger.exception(f"PDConnection.insert got exception: {str(e)}")
             return [str(e)]
+        finally:
+            if conn:
+                self._return_connection(conn)
 
     def update(self, condition: dict, newValue: dict, indexName: str, knowledgebaseId: str) -> bool:
+        conn = None
         try:
-            with self.pool.getconn() as conn:
-                with conn.cursor() as cur:
-                    # 构建SET子句
-                    set_clause = []
-                    params = []
-                    for k, v in newValue.items():
-                        set_clause.append(f"{k} = %s")
-                        params.append(v)
+            conn = self._get_connection()
+            with conn.cursor() as cur:
+                # 构建SET子句
+                set_clause = []
+                params = []
+                for k, v in newValue.items():
+                    set_clause.append(f"{k} = %s")
+                    params.append(v)
 
-                    # 构建WHERE子句
-                    where_conditions = []
-                    if knowledgebaseId:
-                        where_conditions.append("kb_id = %s")
-                        params.append(knowledgebaseId)
+                # 构建WHERE子句
+                where_conditions = []
+                if knowledgebaseId:
+                    where_conditions.append("kb_id = %s")
+                    params.append(knowledgebaseId)
 
-                    if "id" in condition:
-                        where_conditions.append("id = %s")
-                        params.append(condition["id"])
+                if "id" in condition:
+                    where_conditions.append("id = %s")
+                    params.append(condition["id"])
 
-                    sql = f"""
-                        UPDATE {indexName}
-                        SET {', '.join(set_clause)}
-                        WHERE {' AND '.join(where_conditions)}
-                    """
+                sql = f"""
+                    UPDATE {indexName}
+                    SET {', '.join(set_clause)}
+                    WHERE {' AND '.join(where_conditions)}
+                """
 
-                    cur.execute(sql, params)
-                    conn.commit()
-                    return True
-        except Exception:
-            logger.exception("PDConnection.update got exception")
+                cur.execute(sql, params)
+                conn.commit()
+                return True
+        except Exception as e:
+            logger.exception(f"PDConnection.update got exception: {str(e)}")
             return False
+        finally:
+            if conn:
+                self._return_connection(conn)
 
     def delete(self, condition: dict, indexName: str, knowledgebaseId: str) -> int:
+        conn = None
         try:
-            with self.pool.getconn() as conn:
-                with conn.cursor() as cur:
-                    where_conditions = ["kb_id = %s"]
-                    params = [knowledgebaseId]
+            conn = self._get_connection()
+            with conn.cursor() as cur:
+                where_conditions = ["kb_id = %s"]
+                params = [knowledgebaseId]
 
-                    if "id" in condition:
-                        chunk_ids = condition["id"]
-                        if not isinstance(chunk_ids, list):
-                            chunk_ids = [chunk_ids]
-                        if chunk_ids:
-                            where_conditions.append("id = ANY(%s)")
-                            params.append(chunk_ids)
+                if "id" in condition:
+                    chunk_ids = condition["id"]
+                    if not isinstance(chunk_ids, list):
+                        chunk_ids = [chunk_ids]
+                    if chunk_ids:
+                        where_conditions.append("id = ANY(%s)")
+                        params.append(chunk_ids)
 
-                    sql = f"""
-                        DELETE FROM {indexName}
-                        WHERE {' AND '.join(where_conditions)}
-                        RETURNING id
-                    """
+                sql = f"""
+                    DELETE FROM {indexName}
+                    WHERE {' AND '.join(where_conditions)}
+                    RETURNING id
+                """
 
-                    cur.execute(sql, params)
-                    deleted = cur.rowcount
-                    conn.commit()
-                    return deleted
-        except Exception:
-            logger.exception("PDConnection.delete got exception")
+                cur.execute(sql, params)
+                deleted = cur.rowcount
+                conn.commit()
+                return deleted
+        except Exception as e:
+            logger.exception(f"PDConnection.delete got exception: {str(e)}")
             return 0
+        finally:
+            if conn:
+                self._return_connection(conn)
 
     """
     Helper functions for search result
@@ -592,29 +716,30 @@ class PDConnection(DocStoreConnection):
         
         # 添加重试机制
         for i in range(ATTEMPT_TIME):
+            conn = None
             try:
-                with self.pool.getconn() as conn:
-                    with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                        cur.execute(sql)
+                conn = self._get_connection()
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(sql)
+                    
+                    if format == "json":
+                        # 获取所有列名
+                        columns = [{"name": desc[0], "type": "text"} for desc in cur.description]
                         
-                        if format == "json":
-                            # 获取所有列名
-                            columns = [{"name": desc[0], "type": "text"} for desc in cur.description]
-                            
-                            # 获取结果行
-                            rows = cur.fetchmany(fetch_size)
-                            
-                            # 构建与ES兼容的响应格式
-                            result = {
-                                "columns": columns,
-                                "rows": [[row[col["name"]] for col in columns] for row in rows],
-                                "cursor": None  # ParadeDB不支持游标，设为None
-                            }
-                            
-                            return result
-                        else:
-                            # 返回默认格式
-                            return {"results": [dict(row) for row in cur.fetchmany(fetch_size)]}
+                        # 获取结果行
+                        rows = cur.fetchmany(fetch_size)
+                        
+                        # 构建与ES兼容的响应格式
+                        result = {
+                            "columns": columns,
+                            "rows": [[row[col["name"]] for col in columns] for row in rows],
+                            "cursor": None  # ParadeDB不支持游标，设为None
+                        }
+                        
+                        return result
+                    else:
+                        # 返回默认格式
+                        return {"results": [dict(row) for row in cur.fetchmany(fetch_size)]}
             except psycopg2.OperationalError as e:
                 # 连接超时处理
                 logger.warning(f"PDConnection.sql connection timeout: {str(e)}")
@@ -631,6 +756,9 @@ class PDConnection(DocStoreConnection):
                 elif "does not exist" in error_msg.lower():
                     error_msg = f"表或字段不存在: {error_msg}"
                 return {"error": error_msg}
+            finally:
+                if conn:
+                    self._return_connection(conn)
         
         # 所有尝试都失败
         logger.error("PDConnection.sql timeout for all attempts!")
@@ -639,3 +767,25 @@ class PDConnection(DocStoreConnection):
     def __del__(self):
         if hasattr(self, 'pool'):
             self.pool.closeall()
+
+class ManagedConnection:
+    """包装PostgreSQL连接，实现上下文管理器接口"""
+    
+    def __init__(self, connection_manager, conn):
+        self.connection_manager = connection_manager
+        self.conn = conn
+        
+    def __enter__(self):
+        return self.conn
+        
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.connection_manager._return_connection(self.conn)
+        
+    def cursor(self, *args, **kwargs):
+        return self.conn.cursor(*args, **kwargs)
+        
+    def commit(self):
+        return self.conn.commit()
+        
+    def rollback(self):
+        return self.conn.rollback()
