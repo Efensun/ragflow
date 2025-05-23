@@ -94,12 +94,20 @@ class PDConnection(DocStoreConnection):
         """归还连接并记录连接计数"""
         if conn:
             try:
+                # 如果conn是ManagedConnection实例，获取实际连接
+                actual_conn = conn.conn if hasattr(conn, 'conn') else conn
+                
                 # 检查连接是否在已使用的连接池中
-                if conn in self.pool._used:
-                    self.pool.putconn(conn)
+                if hasattr(self.pool, '_used') and actual_conn in self.pool._used:
+                    self.pool.putconn(actual_conn)
                     self._total_released += 1
                 else:
-                    logger.warning("Attempting to return unkeyed connection to pool")
+                    # 尝试直接归还连接
+                    try:
+                        self.pool.putconn(actual_conn)
+                        self._total_released += 1
+                    except Exception as e:
+                        logger.warning(f"Connection not in pool or already returned: {str(e)}")
             except Exception as e:
                 logger.error(f"Error returning connection to pool: {str(e)}")
 
@@ -189,7 +197,14 @@ class PDConnection(DocStoreConnection):
                 return True
             else:
                 logger.error(f"Failed to verify/upgrade table {indexName} schema")
-                return False
+                # 如果升级失败，尝试删除并重新创建表
+                logger.warning(f"Attempting to drop and recreate table {indexName}")
+                try:
+                    self.deleteIdx(indexName, knowledgebaseId)
+                    logger.info(f"Dropped table {indexName}, will recreate")
+                except Exception as e:
+                    logger.error(f"Failed to drop table {indexName}: {str(e)}")
+                    return False
         
         conn = None
         try:
@@ -882,13 +897,20 @@ class PDConnection(DocStoreConnection):
         try:
             conn = self._get_connection()
             with conn.cursor() as cur:
-                # 获取当前表的字段列表
+                # 获取当前表的字段列表和类型
                 cur.execute(f"""
-                    SELECT column_name 
+                    SELECT column_name, data_type 
                     FROM information_schema.columns 
                     WHERE table_name = %s
+                    ORDER BY column_name
                 """, (indexName,))
-                existing_columns = {row[0] for row in cur.fetchall()}
+                existing_columns_with_types = cur.fetchall()
+                existing_columns = {row[0] for row in existing_columns_with_types}
+                
+                # 打印当前表结构用于调试
+                logger.info(f"Current table {indexName} schema:")
+                for col_name, col_type in existing_columns_with_types:
+                    logger.info(f"  {col_name}: {col_type}")
                 
                 # 定义所有应该存在的字段及其类型
                 required_fields = {
@@ -945,16 +967,36 @@ class PDConnection(DocStoreConnection):
                         current_type_result = cur.fetchone()
                         if current_type_result and current_type_result[0] == old_type:
                             try:
-                                # 修改字段类型
-                                cur.execute(f"""
-                                    ALTER TABLE {indexName} 
-                                    ALTER COLUMN {field_name} TYPE {new_type} 
-                                    USING {field_name}::text::{new_type}
-                                """)
+                                # 修改字段类型 - 使用更安全的转换方式
+                                if new_type == 'JSONB':
+                                    # 对于转换到JSONB的情况，先将数据转换为JSON格式
+                                    cur.execute(f"""
+                                        ALTER TABLE {indexName} 
+                                        ALTER COLUMN {field_name} TYPE {new_type} 
+                                        USING CASE 
+                                            WHEN {field_name} IS NULL THEN NULL 
+                                            ELSE to_jsonb({field_name}) 
+                                        END
+                                    """)
+                                else:
+                                    cur.execute(f"""
+                                        ALTER TABLE {indexName} 
+                                        ALTER COLUMN {field_name} TYPE {new_type} 
+                                        USING {field_name}::text::{new_type}
+                                    """)
                                 modified_fields.append(f"{field_name}({old_type}->{new_type})")
                                 logger.info(f"Modified field {field_name} type from {old_type} to {new_type} in table {indexName}")
                             except Exception as e:
                                 logger.warning(f"Failed to modify field {field_name} type in table {indexName}: {str(e)}")
+                                # 如果转换失败，尝试删除并重新添加字段
+                                try:
+                                    logger.info(f"Attempting to drop and recreate field {field_name}")
+                                    cur.execute(f"ALTER TABLE {indexName} DROP COLUMN IF EXISTS {field_name}")
+                                    cur.execute(f"ALTER TABLE {indexName} ADD COLUMN {field_name} {new_type}")
+                                    modified_fields.append(f"{field_name}(dropped+recreated)")
+                                    logger.info(f"Successfully recreated field {field_name} as {new_type}")
+                                except Exception as e2:
+                                    logger.error(f"Failed to recreate field {field_name}: {str(e2)}")
                 
                 for field_name, field_type in required_fields.items():
                     if field_name not in existing_columns:
@@ -989,12 +1031,15 @@ class ManagedConnection:
     def __init__(self, connection_manager, conn):
         self.connection_manager = connection_manager
         self.conn = conn
+        self._returned = False
         
     def __enter__(self):
-        return self.conn
+        return self
         
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self.connection_manager._return_connection(self.conn)
+        if not self._returned:
+            self.connection_manager._return_connection(self.conn)
+            self._returned = True
         
     def cursor(self, *args, **kwargs):
         return self.conn.cursor(*args, **kwargs)
@@ -1004,3 +1049,11 @@ class ManagedConnection:
         
     def rollback(self):
         return self.conn.rollback()
+        
+    def __del__(self):
+        if not self._returned:
+            try:
+                self.connection_manager._return_connection(self.conn)
+                self._returned = True
+            except:
+                pass  # 忽略析构时的错误
