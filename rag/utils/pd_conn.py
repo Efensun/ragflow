@@ -180,6 +180,17 @@ class PDConnection(DocStoreConnection):
     """
 
     def createIdx(self, indexName: str, knowledgebaseId: str, vectorSize: int):
+        # 检查表是否已存在
+        if self.indexExist(indexName):
+            logger.info(f"Table {indexName} already exists, checking schema...")
+            # 升级表结构以确保所有字段都存在
+            if self._upgrade_table_schema(indexName):
+                logger.info(f"Table {indexName} schema verified/upgraded successfully")
+                return True
+            else:
+                logger.error(f"Failed to verify/upgrade table {indexName} schema")
+                return False
+        
         conn = None
         try:
             conn = self._get_connection()
@@ -193,17 +204,41 @@ class PDConnection(DocStoreConnection):
                         docnm_kwd TEXT,              -- 文档名称(与ES兼容)
                         content TEXT,                -- 原始内容
                         content_ltks TEXT,           -- 内容标记(与ES兼容)
+                        content_sm_ltks TEXT,        -- 内容细粒度标记(与ES兼容)
                         content_with_weight TEXT,    -- 带权重内容(与ES兼容)
                         title TEXT,                  -- 标题
                         title_tks TEXT,              -- 标题标记(与ES兼容)
+                        title_sm_tks TEXT,           -- 标题细粒度标记(与ES兼容)
+                        name_kwd TEXT,               -- 名称关键词(与ES兼容)
                         important_kwd JSONB,         -- 重要关键词(与ES兼容)
+                        important_tks TEXT,          -- 重要关键词标记(与ES兼容)
                         question_kwd JSONB,          -- 问题关键词(与ES兼容)
+                        question_tks TEXT,           -- 问题关键词标记(与ES兼容)
                         img_id TEXT,                 -- 图片ID(与ES兼容)
                         position_int JSONB,          -- 位置信息(与ES兼容)
                         page_num_int INTEGER,        -- 页码(与ES兼容)
                         top_int INTEGER,             -- 顶部位置(与ES兼容)
                         available_int INTEGER DEFAULT 1,  -- 可用标志
                         create_timestamp_flt FLOAT,  -- 创建时间戳(与ES兼容)
+                        create_time TEXT,            -- 创建时间字符串
+                        authors_tks TEXT,            -- 作者标记(与ES兼容)
+                        authors_sm_tks TEXT,         -- 作者细粒度标记(与ES兼容)
+                        weight_int INTEGER DEFAULT 0,     -- 权重整数
+                        weight_flt FLOAT DEFAULT 0.0,     -- 权重浮点
+                        rank_int INTEGER DEFAULT 0,       -- 排名整数
+                        rank_flt FLOAT DEFAULT 0.0,       -- 排名浮点
+                        knowledge_graph_kwd TEXT,    -- 知识图谱关键词
+                        entities_kwd TEXT,           -- 实体关键词
+                        pagerank_fea INTEGER DEFAULT 0,   -- PageRank特征
+                        tag_feas TEXT,               -- 标签特征
+                        tag_kwd TEXT,                -- 标签关键词
+                        from_entity_kwd TEXT,        -- 来源实体关键词
+                        to_entity_kwd TEXT,          -- 目标实体关键词
+                        entity_kwd TEXT,             -- 实体关键词
+                        entity_type_kwd TEXT,        -- 实体类型关键词
+                        source_id TEXT,              -- 源ID
+                        n_hop_with_weight TEXT,      -- N跳带权重
+                        removed_kwd TEXT,            -- 移除的关键词
                         metadata JSONB,              -- 其他元数据
                         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
                         updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
@@ -781,6 +816,76 @@ class PDConnection(DocStoreConnection):
     def __del__(self):
         if hasattr(self, 'pool'):
             self.pool.closeall()
+
+    def _upgrade_table_schema(self, indexName: str) -> bool:
+        """
+        升级现有表结构，添加缺失的字段
+        """
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn.cursor() as cur:
+                # 获取当前表的字段列表
+                cur.execute(f"""
+                    SELECT column_name 
+                    FROM information_schema.columns 
+                    WHERE table_name = %s
+                """, (indexName,))
+                existing_columns = {row[0] for row in cur.fetchall()}
+                
+                # 定义所有应该存在的字段及其类型
+                required_fields = {
+                    'content_sm_ltks': 'TEXT',
+                    'title_sm_tks': 'TEXT',
+                    'name_kwd': 'TEXT',
+                    'important_tks': 'TEXT',
+                    'question_tks': 'TEXT',
+                    'create_time': 'TEXT',
+                    'authors_tks': 'TEXT',
+                    'authors_sm_tks': 'TEXT',
+                    'weight_int': 'INTEGER DEFAULT 0',
+                    'weight_flt': 'FLOAT DEFAULT 0.0',
+                    'rank_int': 'INTEGER DEFAULT 0',
+                    'rank_flt': 'FLOAT DEFAULT 0.0',
+                    'knowledge_graph_kwd': 'TEXT',
+                    'entities_kwd': 'TEXT',
+                    'pagerank_fea': 'INTEGER DEFAULT 0',
+                    'tag_feas': 'TEXT',
+                    'tag_kwd': 'TEXT',
+                    'from_entity_kwd': 'TEXT',
+                    'to_entity_kwd': 'TEXT',
+                    'entity_kwd': 'TEXT',
+                    'entity_type_kwd': 'TEXT',
+                    'source_id': 'TEXT',
+                    'n_hop_with_weight': 'TEXT',
+                    'removed_kwd': 'TEXT'
+                }
+                
+                # 添加缺失的字段
+                added_fields = []
+                for field_name, field_type in required_fields.items():
+                    if field_name not in existing_columns:
+                        try:
+                            cur.execute(f"ALTER TABLE {indexName} ADD COLUMN {field_name} {field_type}")
+                            added_fields.append(field_name)
+                            logger.info(f"Added missing field {field_name} to table {indexName}")
+                        except Exception as e:
+                            logger.warning(f"Failed to add field {field_name} to table {indexName}: {str(e)}")
+                
+                if added_fields:
+                    conn.commit()
+                    logger.info(f"Successfully upgraded table {indexName}, added fields: {added_fields}")
+                    return True
+                else:
+                    logger.info(f"Table {indexName} schema is up to date")
+                    return True
+                    
+        except Exception as e:
+            logger.exception(f"Failed to upgrade table {indexName} schema: {str(e)}")
+            return False
+        finally:
+            if conn:
+                self._return_connection(conn)
 
 class ManagedConnection:
     """包装PostgreSQL连接，实现上下文管理器接口"""
