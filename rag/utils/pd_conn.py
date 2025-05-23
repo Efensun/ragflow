@@ -422,6 +422,8 @@ class PDConnection(DocStoreConnection):
                 has_vector_search = True
                 vector_query = expr.embedding_data
                 vector_topn = expr.topn
+                # ParadeDB中使用固定的embedding字段名，无论原始字段名是什么
+                # 原始字段名如q_1024_vec会在insert时映射到embedding字段
 
         # 构建WHERE子句字符串
         where_clause = ""
@@ -559,7 +561,16 @@ class PDConnection(DocStoreConnection):
                 """, (chunkId, knowledgebaseIds))
                 result = cur.fetchone()
                 if result:
-                    return dict(result)
+                    result_dict = dict(result)
+                    
+                    # 将embedding字段映射回动态的向量字段名以保持兼容性
+                    if 'embedding' in result_dict and result_dict['embedding'] is not None:
+                        vector_data = result_dict.pop('embedding')
+                        # 根据向量长度生成动态字段名
+                        vector_size = len(vector_data) if isinstance(vector_data, list) else len(vector_data.tolist())
+                        result_dict[f'q_{vector_size}_vec'] = vector_data
+                    
+                    return result_dict
                 return None
         except Exception as e:
             logger.exception(f"PDConnection.get({chunkId}) got exception: {str(e)}")
@@ -587,7 +598,20 @@ class PDConnection(DocStoreConnection):
                         doc_id = doc_copy.pop("id", "")
                         doc_copy["kb_id"] = knowledgebaseId
                         
-                        # 不再过滤字段，保留所有ES兼容字段
+                        # 处理动态向量字段名映射到固定的embedding字段
+                        vector_field_pattern = re.compile(r'q_(\d+)_vec')
+                        embedding_data = None
+                        for field_name in list(doc_copy.keys()):
+                            match = vector_field_pattern.match(field_name)
+                            if match:
+                                # 找到向量字段，将其映射到embedding字段
+                                embedding_data = doc_copy.pop(field_name)
+                                break
+                        
+                        # 如果找到了向量数据，添加到embedding字段
+                        if embedding_data is not None:
+                            doc_copy["embedding"] = embedding_data
+                        
                         # 构建SQL的字段列表和占位符
                         fields = ", ".join(doc_copy.keys())
                         placeholders = ", ".join(["%s"] * len(doc_copy))
@@ -704,9 +728,22 @@ class PDConnection(DocStoreConnection):
         for hit in res["hits"]["hits"]:
             doc_id = hit["id"]
             field_values = {}
+            
+            # 处理向量字段的映射
+            vector_field_requested = None
+            vector_field_pattern = re.compile(r'q_(\d+)_vec')
             for field in fields:
-                if field in hit:
+                if vector_field_pattern.match(field):
+                    vector_field_requested = field
+                    break
+            
+            for field in fields:
+                if field == vector_field_requested and 'embedding' in hit:
+                    # 将embedding字段映射回请求的动态向量字段名
+                    field_values[field] = hit['embedding']
+                elif field in hit:
                     field_values[field] = hit[field]
+            
             if field_values:
                 result[doc_id] = field_values
         return result
@@ -743,6 +780,11 @@ class PDConnection(DocStoreConnection):
         # SQL预处理 - 类似ES实现的规范化
         sql = re.sub(r"[ `]+", " ", sql)
         sql = sql.replace("%", "")
+        
+        # 处理向量字段名映射
+        # 将q_*_vec字段映射到embedding字段
+        vector_field_pattern = re.compile(r'\bq_\d+_vec\b')
+        sql = vector_field_pattern.sub('embedding', sql)
         
         # 处理全文搜索优化 - 将LIKE转换为ParadeDB的全文搜索语法
         # 示例: content_ltks LIKE '%word%' => content_ltks @@@ 'word'
