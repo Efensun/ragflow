@@ -215,18 +215,18 @@ class PDConnection(DocStoreConnection):
                         question_kwd JSONB,          -- 问题关键词(与ES兼容)
                         question_tks TEXT,           -- 问题关键词标记(与ES兼容)
                         img_id TEXT,                 -- 图片ID(与ES兼容)
-                        position_int JSONB,          -- 位置信息(与ES兼容)
-                        page_num_int INTEGER,        -- 页码(与ES兼容)
-                        top_int INTEGER,             -- 顶部位置(与ES兼容)
+                        position_int JSONB,          -- 位置信息(与ES兼容，支持数组)
+                        page_num_int JSONB,          -- 页码(与ES兼容，支持数组)
+                        top_int JSONB,               -- 顶部位置(与ES兼容，支持数组)
                         available_int INTEGER DEFAULT 1,  -- 可用标志
                         create_timestamp_flt FLOAT,  -- 创建时间戳(与ES兼容)
                         create_time TEXT,            -- 创建时间字符串
                         authors_tks TEXT,            -- 作者标记(与ES兼容)
                         authors_sm_tks TEXT,         -- 作者细粒度标记(与ES兼容)
-                        weight_int INTEGER DEFAULT 0,     -- 权重整数
-                        weight_flt FLOAT DEFAULT 0.0,     -- 权重浮点
-                        rank_int INTEGER DEFAULT 0,       -- 排名整数
-                        rank_flt FLOAT DEFAULT 0.0,       -- 排名浮点
+                        weight_int JSONB DEFAULT '0',     -- 权重整数(支持数组)
+                        weight_flt JSONB DEFAULT '0.0',   -- 权重浮点(支持数组)
+                        rank_int JSONB DEFAULT '0',       -- 排名整数(支持数组)
+                        rank_flt JSONB DEFAULT '0.0',     -- 排名浮点(支持数组)
                         knowledge_graph_kwd TEXT,    -- 知识图谱关键词
                         entities_kwd TEXT,           -- 实体关键词
                         pagerank_fea INTEGER DEFAULT 0,   -- PageRank特征
@@ -612,6 +612,21 @@ class PDConnection(DocStoreConnection):
                         if embedding_data is not None:
                             doc_copy["embedding"] = embedding_data
                         
+                        # 处理可能包含数组或复杂数据的字段，确保它们能正确存储到JSONB字段中
+                        jsonb_fields = {'position_int', 'page_num_int', 'top_int', 'weight_int', 'weight_flt', 'rank_int', 'rank_flt'}
+                        for field_name in jsonb_fields:
+                            if field_name in doc_copy:
+                                value = doc_copy[field_name]
+                                # 如果值不是None且不是字符串，将其转换为JSON字符串
+                                if value is not None and not isinstance(value, str):
+                                    try:
+                                        import json
+                                        doc_copy[field_name] = json.dumps(value)
+                                    except (TypeError, ValueError) as e:
+                                        # 如果无法序列化，转换为字符串
+                                        doc_copy[field_name] = str(value)
+                                        logger.warning(f"Field {field_name} value {value} converted to string: {e}")
+                        
                         # 构建SQL的字段列表和占位符
                         fields = ", ".join(doc_copy.keys())
                         placeholders = ", ".join(["%s"] * len(doc_copy))
@@ -885,10 +900,10 @@ class PDConnection(DocStoreConnection):
                     'create_time': 'TEXT',
                     'authors_tks': 'TEXT',
                     'authors_sm_tks': 'TEXT',
-                    'weight_int': 'INTEGER DEFAULT 0',
-                    'weight_flt': 'FLOAT DEFAULT 0.0',
-                    'rank_int': 'INTEGER DEFAULT 0',
-                    'rank_flt': 'FLOAT DEFAULT 0.0',
+                    'weight_int': 'JSONB DEFAULT \'0\'',
+                    'weight_flt': 'JSONB DEFAULT \'0.0\'',
+                    'rank_int': 'JSONB DEFAULT \'0\'',
+                    'rank_flt': 'JSONB DEFAULT \'0.0\'',
                     'knowledge_graph_kwd': 'TEXT',
                     'entities_kwd': 'TEXT',
                     'pagerank_fea': 'INTEGER DEFAULT 0',
@@ -905,6 +920,42 @@ class PDConnection(DocStoreConnection):
                 
                 # 添加缺失的字段
                 added_fields = []
+                modified_fields = []
+                
+                # 需要修改类型的字段映射（从旧类型到新类型）
+                type_changes = {
+                    'page_num_int': ('integer', 'JSONB'),
+                    'top_int': ('integer', 'JSONB'), 
+                    'position_int': ('integer', 'JSONB'),
+                    'weight_int': ('integer', 'JSONB'),
+                    'weight_flt': ('double precision', 'JSONB'),
+                    'rank_int': ('integer', 'JSONB'),
+                    'rank_flt': ('double precision', 'JSONB')
+                }
+                
+                # 检查需要修改类型的字段
+                for field_name, (old_type, new_type) in type_changes.items():
+                    if field_name in existing_columns:
+                        # 检查当前字段类型
+                        cur.execute(f"""
+                            SELECT data_type 
+                            FROM information_schema.columns 
+                            WHERE table_name = %s AND column_name = %s
+                        """, (indexName, field_name))
+                        current_type_result = cur.fetchone()
+                        if current_type_result and current_type_result[0] == old_type:
+                            try:
+                                # 修改字段类型
+                                cur.execute(f"""
+                                    ALTER TABLE {indexName} 
+                                    ALTER COLUMN {field_name} TYPE {new_type} 
+                                    USING {field_name}::text::{new_type}
+                                """)
+                                modified_fields.append(f"{field_name}({old_type}->{new_type})")
+                                logger.info(f"Modified field {field_name} type from {old_type} to {new_type} in table {indexName}")
+                            except Exception as e:
+                                logger.warning(f"Failed to modify field {field_name} type in table {indexName}: {str(e)}")
+                
                 for field_name, field_type in required_fields.items():
                     if field_name not in existing_columns:
                         try:
@@ -914,9 +965,12 @@ class PDConnection(DocStoreConnection):
                         except Exception as e:
                             logger.warning(f"Failed to add field {field_name} to table {indexName}: {str(e)}")
                 
-                if added_fields:
+                if added_fields or modified_fields:
                     conn.commit()
-                    logger.info(f"Successfully upgraded table {indexName}, added fields: {added_fields}")
+                    if added_fields:
+                        logger.info(f"Successfully upgraded table {indexName}, added fields: {added_fields}")
+                    if modified_fields:
+                        logger.info(f"Successfully upgraded table {indexName}, modified fields: {modified_fields}")
                     return True
                 else:
                     logger.info(f"Table {indexName} schema is up to date")
