@@ -92,24 +92,37 @@ class PDConnection(DocStoreConnection):
 
     def _return_connection(self, conn):
         """归还连接并记录连接计数"""
-        if conn:
+        if not conn:
+            return
+            
+        try:
+            # 如果conn是ManagedConnection实例，获取实际连接
+            if hasattr(conn, 'conn'):
+                actual_conn = conn.conn
+                # 标记为已归还，避免重复归还
+                if hasattr(conn, '_returned') and conn._returned:
+                    return
+                if hasattr(conn, '_returned'):
+                    conn._returned = True
+            else:
+                actual_conn = conn
+            
+            # 检查连接是否有效
+            if not actual_conn or actual_conn.closed:
+                logger.debug("Connection is already closed, skipping return")
+                return
+            
+            # 尝试归还连接到池中
             try:
-                # 如果conn是ManagedConnection实例，获取实际连接
-                actual_conn = conn.conn if hasattr(conn, 'conn') else conn
-                
-                # 检查连接是否在已使用的连接池中
-                if hasattr(self.pool, '_used') and actual_conn in self.pool._used:
-                    self.pool.putconn(actual_conn)
-                    self._total_released += 1
-                else:
-                    # 尝试直接归还连接
-                    try:
-                        self.pool.putconn(actual_conn)
-                        self._total_released += 1
-                    except Exception as e:
-                        logger.warning(f"Connection not in pool or already returned: {str(e)}")
-            except Exception as e:
-                logger.error(f"Error returning connection to pool: {str(e)}")
+                self.pool.putconn(actual_conn)
+                self._total_released += 1
+                logger.debug("Successfully returned connection to pool")
+            except psycopg2.pool.PoolError as e:
+                # 连接可能不在池中或已经归还
+                logger.debug(f"Pool error when returning connection: {str(e)}")
+            
+        except Exception as e:
+            logger.debug(f"Error returning connection to pool: {str(e)}")  # 改为debug级别
 
     def _check_connection_pool(self):
         """检查连接池状态，如果发现泄漏则尝试修复"""
@@ -507,10 +520,42 @@ class PDConnection(DocStoreConnection):
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 # 执行主查询
                 cur.execute(sql, params)
+                raw_results = cur.fetchall()
+                
+                # 将ParadeDB结果格式转换为ES兼容格式
+                formatted_hits = []
+                for row in raw_results:
+                    row_dict = dict(row)
+                    # 提取id作为_id
+                    doc_id = row_dict.pop('id', '')
+                    
+                    # 将embedding字段映射回动态的向量字段名以保持兼容性
+                    if 'embedding' in row_dict and row_dict['embedding'] is not None:
+                        vector_data = row_dict.pop('embedding')
+                        # 根据向量长度生成动态字段名
+                        if isinstance(vector_data, list):
+                            vector_size = len(vector_data)
+                        else:
+                            try:
+                                vector_data = vector_data.tolist() if hasattr(vector_data, 'tolist') else list(vector_data)
+                                vector_size = len(vector_data)
+                            except:
+                                vector_size = 1024  # 默认向量大小
+                                vector_data = []
+                        row_dict[f'q_{vector_size}_vec'] = vector_data
+                    
+                    # 构建ES兼容的hit格式
+                    formatted_hit = {
+                        "_id": doc_id,
+                        "_source": row_dict,
+                        "_score": 1.0  # 默认评分，如果需要真实评分可以后续改进
+                    }
+                    formatted_hits.append(formatted_hit)
+
                 results = {
                     "hits": {
-                        "total": cur.rowcount,
-                        "hits": cur.fetchall()
+                        "total": {"value": len(formatted_hits), "relation": "eq"},
+                        "hits": formatted_hits
                     }
                 }
 
@@ -529,7 +574,7 @@ class PDConnection(DocStoreConnection):
                         """
                         
                         # 执行聚合查询
-                        cur.execute(agg_sql, params)
+                        cur.execute(agg_sql, params[:-1] if has_vector_search else params)  # 排除向量查询参数
                         
                         # 构建与ES兼容的聚合结果格式
                         buckets = []
@@ -748,15 +793,18 @@ class PDConnection(DocStoreConnection):
     """
 
     def getTotal(self, res):
+        if isinstance(res["hits"]["total"], dict):
+            return res["hits"]["total"]["value"]
         return res["hits"]["total"]
 
     def getChunkIds(self, res):
-        return [hit["id"] for hit in res["hits"]["hits"]]
+        return [hit["_id"] for hit in res["hits"]["hits"]]
 
     def getFields(self, res, fields: list[str]) -> dict[str, dict]:
         result = {}
         for hit in res["hits"]["hits"]:
-            doc_id = hit["id"]
+            doc_id = hit["_id"]
+            source_data = hit["_source"]
             field_values = {}
             
             # 处理向量字段的映射
@@ -768,11 +816,11 @@ class PDConnection(DocStoreConnection):
                     break
             
             for field in fields:
-                if field == vector_field_requested and 'embedding' in hit:
-                    # 将embedding字段映射回请求的动态向量字段名
-                    field_values[field] = hit['embedding']
-                elif field in hit:
-                    field_values[field] = hit[field]
+                if field == vector_field_requested and vector_field_requested in source_data:
+                    # 动态向量字段名已经在search方法中映射好了
+                    field_values[field] = source_data[vector_field_requested]
+                elif field in source_data:
+                    field_values[field] = source_data[field]
             
             if field_values:
                 result[doc_id] = field_values
@@ -781,10 +829,11 @@ class PDConnection(DocStoreConnection):
     def getHighlight(self, res, keywords: list[str], fieldnm: str):
         highlights = {}
         for hit in res["hits"]["hits"]:
-            doc_id = hit["id"]
+            doc_id = hit["_id"]
+            source_data = hit["_source"]
             hl_field = f"{fieldnm}_hl"
-            if hl_field in hit:
-                highlights[doc_id] = hit[hl_field]
+            if hl_field in source_data:
+                highlights[doc_id] = source_data[hl_field]
         return highlights
 
     def getAggregation(self, res, fieldnm: str):
