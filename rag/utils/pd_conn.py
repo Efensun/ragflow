@@ -892,6 +892,10 @@ class PDConnection(DocStoreConnection):
         try:
             conn = self._get_connection()
             with conn.cursor() as cur:
+                # 处理ES兼容的特殊操作
+                if "remove" in newValue:
+                    return self._handle_remove_operation(condition, newValue, indexName, knowledgebaseId, cur, conn)
+                
                 # 构建SET子句
                 set_clause = []
                 params = []
@@ -920,13 +924,44 @@ class PDConnection(DocStoreConnection):
 
                 # 构建WHERE子句
                 where_conditions = []
+                params_where = []
+                
+                # 处理knowledgebaseId
                 if knowledgebaseId:
                     where_conditions.append("kb_id = %s")
-                    params.append(knowledgebaseId)
+                    params_where.append(knowledgebaseId)
 
-                if "id" in condition:
-                    where_conditions.append("id = %s")
-                    params.append(condition["id"])
+                # 处理其他条件
+                for key, value in condition.items():
+                    if key == "kb_id":
+                        continue  # 已经处理过了
+                    elif key == "id":
+                        where_conditions.append("id = %s")
+                        params_where.append(value)
+                    elif key == "knowledge_graph_kwd":
+                        if isinstance(value, list):
+                            # 处理知识图谱关键词数组查询
+                            placeholders = ",".join(["%s"] * len(value))
+                            where_conditions.append(f"knowledge_graph_kwd = ANY(ARRAY[{placeholders}])")
+                            params_where.extend(value)
+                        else:
+                            where_conditions.append("knowledge_graph_kwd = %s")
+                            params_where.append(value)
+                    elif key == "source_id":
+                        where_conditions.append("source_id = %s")
+                        params_where.append(value)
+                    elif isinstance(value, list):
+                        where_conditions.append(f"{key} = ANY(%s)")
+                        params_where.append(value)
+                    elif isinstance(value, (str, int)):
+                        where_conditions.append(f"{key} = %s")
+                        params_where.append(value)
+                    else:
+                        logger.warning(f"Unsupported condition type for {key}: {type(value)}")
+
+                if not set_clause:
+                    logger.warning("No valid fields to update")
+                    return True
 
                 sql = f"""
                     UPDATE {indexName}
@@ -934,11 +969,17 @@ class PDConnection(DocStoreConnection):
                     WHERE {' AND '.join(where_conditions)}
                 """
 
-                logger.debug(f"Update SQL: {sql}")
-                logger.debug(f"Update params: {params}")
+                # 合并参数：先SET参数，后WHERE参数
+                all_params = params + params_where
                 
-                cur.execute(sql, params)
+                logger.debug(f"Update SQL: {sql}")
+                logger.debug(f"Update params: {all_params}")
+                
+                cur.execute(sql, all_params)
+                affected_rows = cur.rowcount
                 conn.commit()
+                
+                logger.debug(f"Updated {affected_rows} rows")
                 return True
         except Exception as e:
             logger.exception(f"PDConnection.update got exception: {str(e)}")
@@ -946,6 +987,60 @@ class PDConnection(DocStoreConnection):
         finally:
             if conn:
                 self._return_connection(conn)
+
+    def _handle_remove_operation(self, condition: dict, newValue: dict, indexName: str, knowledgebaseId: str, cur, conn):
+        """处理ES兼容的remove操作"""
+        try:
+            remove_spec = newValue["remove"]
+            logger.debug(f"Handling remove operation: {remove_spec}")
+            
+            if isinstance(remove_spec, dict):
+                # 处理字典形式的remove操作，如 {"source_id": "some_id"}
+                for field_name, field_value in remove_spec.items():
+                    if field_name == "source_id":
+                        # 对于source_id字段，将其设置为NULL或删除引用
+                        update_sql = f"""
+                            UPDATE {indexName}
+                            SET source_id = NULL
+                            WHERE source_id = %s
+                        """
+                        if knowledgebaseId:
+                            update_sql += " AND kb_id = %s"
+                            cur.execute(update_sql, [field_value, knowledgebaseId])
+                        else:
+                            cur.execute(update_sql, [field_value])
+                        
+                        logger.debug(f"Removed source_id reference: {field_value}")
+                    else:
+                        # 对于其他字段，尝试从JSONB数组中移除元素
+                        logger.warning(f"Remove operation for field {field_name} not fully implemented, setting to NULL")
+                        update_sql = f"""
+                            UPDATE {indexName}
+                            SET {field_name} = NULL
+                            WHERE {field_name} = %s
+                        """
+                        if knowledgebaseId:
+                            update_sql += " AND kb_id = %s"
+                            cur.execute(update_sql, [field_value, knowledgebaseId])
+                        else:
+                            cur.execute(update_sql, [field_value])
+            
+            elif isinstance(remove_spec, str):
+                # 处理字符串形式的remove操作，直接删除字段
+                logger.warning(f"String remove operation for field {remove_spec} not implemented, skipping")
+            
+            # 处理其他newValue中的字段
+            other_updates = {k: v for k, v in newValue.items() if k != "remove"}
+            if other_updates:
+                # 递归调用update方法处理其他字段
+                return self.update(condition, other_updates, indexName, knowledgebaseId)
+            
+            conn.commit()
+            return True
+            
+        except Exception as e:
+            logger.exception(f"Error handling remove operation: {str(e)}")
+            return False
 
     def delete(self, condition: dict, indexName: str, knowledgebaseId: str) -> int:
         conn = None
