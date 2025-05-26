@@ -27,6 +27,7 @@ from rag.utils.doc_store_conn import DocStoreConnection, MatchExpr, OrderByExpr,
 import re
 import copy
 import hashlib
+from rag.nlp import rag_tokenizer
 
 ATTEMPT_TIME = 2
 logger = logging.getLogger('ragflow.pd_conn')
@@ -505,6 +506,9 @@ class PDConnection(DocStoreConnection):
                 medium_priority_fields = [f for f, w in field_weights if 2.0 <= w < 10.0]  # 中优先级字段
                 low_priority_fields = [f for f, w in field_weights if w < 2.0]  # 低优先级字段
                 
+                # 对搜索文本进行分词处理，与ES保持一致
+                tokenized_search_text = rag_tokenizer.fine_grained_tokenize(rag_tokenizer.tokenize(expr.matching_text))
+                
                 # 构建搜索条件 - 使用嵌套的优先级结构
                 search_conditions = []
                 
@@ -512,21 +516,21 @@ class PDConnection(DocStoreConnection):
                     high_conditions = []
                     for field in high_priority_fields:
                         high_conditions.append(f"{field} @@@ %s")
-                        params.append(expr.matching_text)
+                        params.append(tokenized_search_text)
                     search_conditions.append(f"({' OR '.join(high_conditions)})")
                 
                 if medium_priority_fields:
                     medium_conditions = []
                     for field in medium_priority_fields:
                         medium_conditions.append(f"{field} @@@ %s")
-                        params.append(expr.matching_text)
+                        params.append(tokenized_search_text)
                     search_conditions.append(f"({' OR '.join(medium_conditions)})")
                 
                 if low_priority_fields:
                     low_conditions = []
                     for field in low_priority_fields:
                         low_conditions.append(f"{field} @@@ %s")
-                        params.append(expr.matching_text)
+                        params.append(tokenized_search_text)
                     search_conditions.append(f"({' OR '.join(low_conditions)})")
                 
                 # 将所有优先级的条件用 OR 连接，但高优先级字段会因为 BM25 算法自然获得更高分数
@@ -992,13 +996,15 @@ class PDConnection(DocStoreConnection):
         vector_field_pattern = re.compile(r'\bq_\d+_vec\b')
         sql = vector_field_pattern.sub('embedding', sql)
         
-        # 处理全文搜索优化 - 将LIKE转换为ParadeDB的全文搜索语法
-        # 示例: content_ltks LIKE '%word%' => content_ltks @@@ 'word'
+        # 处理全文搜索优化 - 添加与ES相同的多语言分词处理
+        # 将LIKE转换为ParadeDB的全文搜索语法，并使用rag_tokenizer进行分词
         replaces = []
         for r in re.finditer(r" ([a-z_]+_l?tks)( like | ?= ?)'([^']+)'", sql):
             fld, v = r.group(1), r.group(3)
-            # 使用ParadeDB的BM25全文搜索
-            match = " {} @@@ '{}' ".format(fld, v.replace('%', '').strip())
+            # 使用与ES相同的分词处理逻辑
+            tokenized_text = rag_tokenizer.fine_grained_tokenize(rag_tokenizer.tokenize(v))
+            # 使用ParadeDB的BM25全文搜索，并处理分词后的文本
+            match = " {} @@@ '{}' ".format(fld, tokenized_text.replace('%', '').strip())
             replaces.append(
                 ("{}{}'{}'".format(
                     r.group(1),
