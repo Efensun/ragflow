@@ -671,6 +671,18 @@ class PDConnection(DocStoreConnection):
                 formatted_hits = []
                 for i, row in enumerate(raw_results):
                     row_dict = dict(row)
+                    
+                    # 处理NULL值，将其转换为空字符串以保持与ES的兼容性
+                    for key, value in row_dict.items():
+                        if value is None:
+                            if key in ['title_tks', 'question_tks', 'content_ltks', 'content_sm_ltks', 'important_tks']:
+                                row_dict[key] = ""  # 文本字段设为空字符串
+                            elif key in ['important_kwd', 'question_kwd']:
+                                row_dict[key] = []  # 数组字段设为空数组
+                            elif key in ['position_int', 'page_num_int', 'top_int']:
+                                row_dict[key] = []  # 位置信息设为空数组
+                            # 其他字段保持None
+                    
                     # 提取id作为_id，但保留在_source中
                     doc_id = row_dict.get('id', '')
                     
@@ -798,6 +810,17 @@ class PDConnection(DocStoreConnection):
                 result = cur.fetchone()
                 if result:
                     result_dict = dict(result)
+                    
+                    # 处理NULL值，将其转换为空字符串以保持与ES的兼容性
+                    for key, value in result_dict.items():
+                        if value is None:
+                            if key in ['title_tks', 'question_tks', 'content_ltks', 'content_sm_ltks', 'important_tks']:
+                                result_dict[key] = ""  # 文本字段设为空字符串
+                            elif key in ['important_kwd', 'question_kwd']:
+                                result_dict[key] = []  # 数组字段设为空数组
+                            elif key in ['position_int', 'page_num_int', 'top_int']:
+                                result_dict[key] = []  # 位置信息设为空数组
+                            # 其他字段保持None
                     
                     # 将embedding字段映射回动态的向量字段名以保持兼容性
                     if 'embedding' in result_dict and result_dict['embedding'] is not None:
