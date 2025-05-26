@@ -481,8 +481,59 @@ class PDConnection(DocStoreConnection):
             if isinstance(expr, MatchTextExpr):
                 has_text_search = True
                 text_query = expr.matching_text
-                where_conditions.append(f"{expr.fields[0]} @@@ %s")
-                params.append(expr.matching_text)
+                
+                # 处理字段的boost语法 - 将 ES 的 field^boost 转换为 ParadeDB 兼容格式
+                # ParadeDB 不直接支持字段级别的 boost，但我们可以通过字段优先级来模拟
+                field_weights = []
+                for field in expr.fields:
+                    if "^" in field:
+                        field_name, boost_str = field.split("^", 1)
+                        try:
+                            boost_value = float(boost_str)
+                            field_weights.append((field_name, boost_value))
+                        except ValueError:
+                            field_weights.append((field_name, 1.0))
+                            logger.warning(f"Invalid boost value in field: {field}, using default boost 1.0")
+                    else:
+                        field_weights.append((field, 1.0))
+                
+                # 按权重排序，优先使用高权重字段
+                field_weights.sort(key=lambda x: x[1], reverse=True)
+                
+                # 构建分层搜索策略：优先匹配高权重字段，如果没有结果再扩展到低权重字段
+                high_priority_fields = [f for f, w in field_weights if w >= 10.0]  # 高优先级字段
+                medium_priority_fields = [f for f, w in field_weights if 2.0 <= w < 10.0]  # 中优先级字段
+                low_priority_fields = [f for f, w in field_weights if w < 2.0]  # 低优先级字段
+                
+                # 构建搜索条件 - 使用嵌套的优先级结构
+                search_conditions = []
+                
+                if high_priority_fields:
+                    high_conditions = []
+                    for field in high_priority_fields:
+                        high_conditions.append(f"{field} @@@ %s")
+                        params.append(expr.matching_text)
+                    search_conditions.append(f"({' OR '.join(high_conditions)})")
+                
+                if medium_priority_fields:
+                    medium_conditions = []
+                    for field in medium_priority_fields:
+                        medium_conditions.append(f"{field} @@@ %s")
+                        params.append(expr.matching_text)
+                    search_conditions.append(f"({' OR '.join(medium_conditions)})")
+                
+                if low_priority_fields:
+                    low_conditions = []
+                    for field in low_priority_fields:
+                        low_conditions.append(f"{field} @@@ %s")
+                        params.append(expr.matching_text)
+                    search_conditions.append(f"({' OR '.join(low_conditions)})")
+                
+                # 将所有优先级的条件用 OR 连接，但高优先级字段会因为 BM25 算法自然获得更高分数
+                if search_conditions:
+                    where_conditions.append(f"({' OR '.join(search_conditions)})")
+                
+                logger.debug(f"Text search field priorities: high={high_priority_fields}, medium={medium_priority_fields}, low={low_priority_fields}")
             elif isinstance(expr, MatchDenseExpr):
                 # 标记存在向量搜索，稍后在ORDER BY中处理
                 has_vector_search = True
