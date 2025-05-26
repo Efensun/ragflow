@@ -26,6 +26,7 @@ from rag.utils.doc_store_conn import DocStoreConnection, MatchExpr, OrderByExpr,
     FusionExpr
 import re
 import copy
+import hashlib
 
 ATTEMPT_TIME = 2
 logger = logging.getLogger('ragflow.pd_conn')
@@ -413,6 +414,25 @@ class PDConnection(DocStoreConnection):
             where_conditions.append(f"kb_id = ANY(%s)")
             params.append(knowledgebaseIds)
 
+        # 处理condition参数 - 添加过滤条件
+        for key, value in condition.items():
+            if not value:
+                continue
+            
+            if key == "available_int":
+                if value == 0:
+                    where_conditions.append(f"available_int < 1")
+                else:
+                    where_conditions.append(f"available_int >= 1")
+            elif isinstance(value, list):
+                where_conditions.append(f"{key} = ANY(%s)")
+                params.append(value)
+            elif isinstance(value, (str, int)):
+                where_conditions.append(f"{key} = %s")
+                params.append(value)
+            else:
+                logger.warning(f"Unsupported condition type for {key}: {type(value)}")
+
         # 处理匹配表达式
         has_vector_search = False
         vector_query = None
@@ -522,12 +542,28 @@ class PDConnection(DocStoreConnection):
                 cur.execute(sql, params)
                 raw_results = cur.fetchall()
                 
+                logger.debug(f"PDConnection.search raw results count: {len(raw_results)}")
+                if raw_results:
+                    logger.debug(f"First result keys: {list(raw_results[0].keys())}")
+                    logger.debug(f"First result sample: {dict(raw_results[0])}")
+                
                 # 将ParadeDB结果格式转换为ES兼容格式
                 formatted_hits = []
-                for row in raw_results:
+                for i, row in enumerate(raw_results):
                     row_dict = dict(row)
-                    # 提取id作为_id
-                    doc_id = row_dict.pop('id', '')
+                    # 提取id作为_id，但保留在_source中
+                    doc_id = row_dict.get('id', '')
+                    
+                    logger.debug(f"Row {i}: doc_id='{doc_id}', content_preview='{str(row_dict.get('content_with_weight', ''))[:50]}...'")
+                    
+                    # 如果id为空，生成唯一标识
+                    if not doc_id:
+                        logger.warning(f"Empty doc_id found in row {i}, generating fallback ID")
+                        # 根据内容生成hash作为临时ID
+                        content_hash = hashlib.md5(str(row_dict.get('content_with_weight', f'row_{i}')).encode()).hexdigest()
+                        doc_id = f"temp_{content_hash[:16]}"
+                        row_dict['id'] = doc_id  # 将生成的ID也放入_source中
+                        logger.debug(f"Generated fallback doc_id: {doc_id}")
                     
                     # 将embedding字段映射回动态的向量字段名以保持兼容性
                     if 'embedding' in row_dict and row_dict['embedding'] is not None:
