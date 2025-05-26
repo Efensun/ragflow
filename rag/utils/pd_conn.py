@@ -419,6 +419,10 @@ class PDConnection(DocStoreConnection):
             if not value:
                 continue
             
+            # 跳过非过滤条件的参数
+            if key in ["vector_similarity_weight"]:
+                continue
+                
             if key == "available_int":
                 if value == 0:
                     where_conditions.append(f"available_int < 1")
@@ -441,7 +445,15 @@ class PDConnection(DocStoreConnection):
         has_text_search = False
         text_query = None
 
-        # 首先检查是否有FusionExpr并提取权重
+        # 首先从condition中检查是否有vector_similarity_weight参数
+        if "vector_similarity_weight" in condition:
+            try:
+                vector_similarity_weight = float(condition["vector_similarity_weight"])
+                logger.debug(f"Using vector_similarity_weight from condition: {vector_similarity_weight}")
+            except (ValueError, TypeError):
+                logger.warning(f"Invalid vector_similarity_weight in condition: {condition['vector_similarity_weight']}, using default: {vector_similarity_weight}")
+
+        # 然后检查是否有FusionExpr并提取权重（FusionExpr优先级更高）
         for m in matchExprs:
             if isinstance(m, FusionExpr) and m.method == "weighted_sum" and "weights" in m.fusion_params:
                 # 假设匹配表达式顺序是：[MatchTextExpr, MatchDenseExpr, FusionExpr]
@@ -472,6 +484,7 @@ class PDConnection(DocStoreConnection):
                 vector_topn = expr.topn
                 # ParadeDB中使用固定的embedding字段名，无论原始字段名是什么
                 # 原始字段名如q_1024_vec会在insert时映射到embedding字段
+                logger.debug(f"Vector search requested with field: {expr.vector_column_name}, mapping to embedding field")
 
         # 构建WHERE子句字符串
         where_clause = ""
@@ -843,20 +856,20 @@ class PDConnection(DocStoreConnection):
             source_data = hit["_source"]
             field_values = {}
             
-            # 处理向量字段的映射
-            vector_field_requested = None
-            vector_field_pattern = re.compile(r'q_(\d+)_vec')
             for field in fields:
-                if vector_field_pattern.match(field):
-                    vector_field_requested = field
-                    break
-            
-            for field in fields:
-                if field == vector_field_requested and vector_field_requested in source_data:
-                    # 动态向量字段名已经在search方法中映射好了
-                    field_values[field] = source_data[vector_field_requested]
-                elif field in source_data:
+                if field in source_data:
                     field_values[field] = source_data[field]
+                else:
+                    # 检查是否是向量字段请求，需要从embedding字段映射
+                    vector_field_pattern = re.compile(r'q_(\d+)_vec')
+                    if vector_field_pattern.match(field):
+                        # 请求的是动态向量字段，从embedding字段获取
+                        if "embedding" in source_data and source_data["embedding"] is not None:
+                            field_values[field] = source_data["embedding"]
+                        else:
+                            # 如果embedding字段也没有，设置为空向量
+                            vector_size = int(vector_field_pattern.match(field).group(1))
+                            field_values[field] = [0.0] * vector_size
             
             if field_values:
                 result[doc_id] = field_values

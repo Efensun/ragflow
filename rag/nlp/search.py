@@ -63,6 +63,9 @@ class Dealer:
         for key in ["knowledge_graph_kwd", "available_int", "entity_kwd", "from_entity_kwd", "to_entity_kwd", "removed_kwd"]:
             if key in req and req[key] is not None:
                 condition[key] = req[key]
+        # 传递权重参数给PDConnection
+        if "vector_similarity_weight" in req and req["vector_similarity_weight"] is not None:
+            condition["vector_similarity_weight"] = req["vector_similarity_weight"]
         return condition
 
     def search(self, req, idx_names: str | list[str],
@@ -356,6 +359,7 @@ class Dealer:
         req = {"kb_ids": kb_ids, "doc_ids": doc_ids, "page": page, "size": RERANK_LIMIT,
                "question": question, "vector": True, "topk": top,
                "similarity": similarity_threshold,
+               "vector_similarity_weight": vector_similarity_weight,
                "available_int": 1}
 
         if isinstance(tenant_ids, str):
