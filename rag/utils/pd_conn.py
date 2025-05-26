@@ -560,13 +560,14 @@ class PDConnection(DocStoreConnection):
             
             # 在WHERE子句中已经添加了文本搜索条件
             # 在ORDER BY中添加向量搜索排序，确保两种搜索方式都被使用
-            order_clause = [f"embedding <=> %s"]
-            params.append(vector_query)
+            # 将 Python 列表转换为 ParadeDB 向量格式
+            vector_str = '[' + ','.join(map(str, vector_query)) + ']'
+            order_clause = [f"embedding <=> '{vector_str}'::vector"]
             logger.info(f"🔍 Using hybrid search with weights: text={text_weight:.3f}, vector={vector_similarity_weight:.3f}")
         elif has_vector_search:
             # 只有向量搜索
-            order_clause = [f"embedding <=> %s"]
-            params.append(vector_query)
+            vector_str = '[' + ','.join(map(str, vector_query)) + ']'
+            order_clause = [f"embedding <=> '{vector_str}'::vector"]
             logger.info(f"🔍 Using vector search only with weight={vector_similarity_weight:.3f}")
         elif has_text_search:
             # 只有文本搜索，ParadeDB默认使用BM25排序
