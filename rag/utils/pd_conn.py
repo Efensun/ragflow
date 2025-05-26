@@ -232,11 +232,9 @@ class PDConnection(DocStoreConnection):
                         kb_id TEXT NOT NULL,
                         doc_id TEXT,                 -- 文档ID
                         docnm_kwd TEXT,              -- 文档名称(与ES兼容)
-                        content TEXT,                -- 原始内容
                         content_ltks TEXT,           -- 内容标记(与ES兼容)
                         content_sm_ltks TEXT,        -- 内容细粒度标记(与ES兼容)
                         content_with_weight TEXT,    -- 带权重内容(与ES兼容)
-                        title TEXT,                  -- 标题
                         title_tks TEXT,              -- 标题标记(与ES兼容)
                         title_sm_tks TEXT,           -- 标题细粒度标记(与ES兼容)
                         name_kwd TEXT,               -- 名称关键词(与ES兼容)
@@ -302,8 +300,19 @@ class PDConnection(DocStoreConnection):
                 # 创建BM25索引 - 用于全文搜索
                 cur.execute(f"""
                     CREATE INDEX IF NOT EXISTS {indexName}_bm25 ON {indexName}
-                    USING bm25 (id, content, title, kb_id, available_int, metadata)
-                    WITH (key_field='id');
+                    USING bm25 (
+                        id, 
+                        content_with_weight, 
+                        content_ltks, 
+                        content_sm_ltks,
+                        title_tks,
+                        title_sm_tks,
+                        important_tks,
+                        question_tks,
+                        kb_id, 
+                        available_int, 
+                        metadata
+                    ) WITH (key_field='id');
                 """)
                 
                 # 创建向量索引 - 用于向量相似度搜索
@@ -473,7 +482,7 @@ class PDConnection(DocStoreConnection):
                         text_weight = float(weight_parts[0].strip())
                         # 向量搜索权重
                         vector_similarity_weight = float(weight_parts[1].strip())
-                        logger.debug(f"Using weights: text={text_weight}, vector={vector_similarity_weight}")
+                        logger.info(f"🎯 Using weights from FusionExpr: text={text_weight:.3f}, vector={vector_similarity_weight:.3f}")
                     except ValueError:
                         logger.warning(f"Invalid weight format: {weights}, using default weight: text=0.5, vector={vector_similarity_weight}")
 
@@ -508,6 +517,36 @@ class PDConnection(DocStoreConnection):
                 
                 # 对搜索文本进行分词处理，与ES保持一致
                 tokenized_search_text = rag_tokenizer.fine_grained_tokenize(rag_tokenizer.tokenize(expr.matching_text))
+                
+                # 映射ES字段名到ParadeDB实际字段名
+                field_mapping = {
+                    'title_tks': 'title_tks',
+                    'title_sm_tks': 'title_sm_tks', 
+                    'important_kwd': 'important_kwd',
+                    'important_tks': 'important_tks',
+                    'question_tks': 'question_tks',
+                    'content_ltks': 'content_ltks',
+                    'content_sm_ltks': 'content_sm_ltks',
+                    'content_with_weight': 'content_with_weight',
+                    'content': 'content_with_weight',  # 映射content到content_with_weight
+                    'title': 'title_tks'  # 映射title到title_tks
+                }
+                
+                # 将字段名映射到实际存在的字段
+                mapped_field_weights = []
+                for field_name, boost_value in field_weights:
+                    mapped_field = field_mapping.get(field_name, field_name)
+                    mapped_field_weights.append((mapped_field, boost_value))
+                    if field_name != mapped_field:
+                        logger.debug(f"Mapped search field {field_name} -> {mapped_field}")
+                
+                # 重新按权重排序
+                mapped_field_weights.sort(key=lambda x: x[1], reverse=True)
+                
+                # 构建分层搜索策略：优先匹配高权重字段
+                high_priority_fields = [f for f, w in mapped_field_weights if w >= 10.0]
+                medium_priority_fields = [f for f, w in mapped_field_weights if 2.0 <= w < 10.0]
+                low_priority_fields = [f for f, w in mapped_field_weights if w < 2.0]
                 
                 # 构建搜索条件 - 使用嵌套的优先级结构
                 search_conditions = []
@@ -996,10 +1035,24 @@ class PDConnection(DocStoreConnection):
         vector_field_pattern = re.compile(r'\bq_\d+_vec\b')
         sql = vector_field_pattern.sub('embedding', sql)
         
+        # 处理字段名映射 - 将不存在的字段映射到实际字段
+        field_mappings = [
+            (r'\bcontent\b(?!_)', 'content_with_weight'),  # content -> content_with_weight
+            (r'\btitle\b(?!_)', 'title_tks'),  # title -> title_tks
+        ]
+        
+        original_sql = sql
+        for pattern, replacement in field_mappings:
+            sql = re.sub(pattern, replacement, sql)
+        
+        # 记录字段映射情况（仅在发生映射时）
+        if sql != original_sql:
+            logger.debug(f"Applied field mapping in SQL: {original_sql} -> {sql}")
+        
         # 处理全文搜索优化 - 添加与ES相同的多语言分词处理
         # 将LIKE转换为ParadeDB的全文搜索语法，并使用rag_tokenizer进行分词
         replaces = []
-        for r in re.finditer(r" ([a-z_]+_l?tks)( like | ?= ?)'([^']+)'", sql):
+        for r in re.finditer(r" ([a-z_]+_l?tks|content_with_weight)( like | ?= ?)'([^']+)'", sql):
             fld, v = r.group(1), r.group(3)
             # 使用与ES相同的分词处理逻辑
             tokenized_text = rag_tokenizer.fine_grained_tokenize(rag_tokenizer.tokenize(v))
