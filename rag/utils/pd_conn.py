@@ -895,9 +895,28 @@ class PDConnection(DocStoreConnection):
                 # 构建SET子句
                 set_clause = []
                 params = []
+                
+                # 处理newValue中的数据类型，确保psycopg2能够处理
                 for k, v in newValue.items():
                     set_clause.append(f"{k} = %s")
-                    params.append(v)
+                    
+                    # 处理不同类型的值
+                    if v is None:
+                        params.append(None)
+                    elif isinstance(v, (str, int, float, bool)):
+                        params.append(v)
+                    elif isinstance(v, (dict, list)):
+                        # 将字典和列表转换为JSON字符串
+                        import json
+                        try:
+                            params.append(json.dumps(v, ensure_ascii=False))
+                        except (TypeError, ValueError) as e:
+                            logger.warning(f"Failed to serialize {k}={v} to JSON: {e}, using string representation")
+                            params.append(str(v))
+                    else:
+                        # 其他类型转换为字符串
+                        params.append(str(v))
+                        logger.debug(f"Converted {k}={v} (type: {type(v)}) to string")
 
                 # 构建WHERE子句
                 where_conditions = []
@@ -915,6 +934,9 @@ class PDConnection(DocStoreConnection):
                     WHERE {' AND '.join(where_conditions)}
                 """
 
+                logger.debug(f"Update SQL: {sql}")
+                logger.debug(f"Update params: {params}")
+                
                 cur.execute(sql, params)
                 conn.commit()
                 return True
