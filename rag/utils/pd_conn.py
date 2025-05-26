@@ -398,10 +398,16 @@ class PDConnection(DocStoreConnection):
                 }
             }
 
-        # 构建SELECT子句
+        # 构建SELECT子句 - 处理向量字段映射
         select_clause = []
+        vector_field_pattern = re.compile(r'q_(\d+)_vec')
         for field in selectFields:
-            select_clause.append(field)
+            # 如果是动态向量字段，映射到embedding字段
+            if vector_field_pattern.match(field):
+                select_clause.append("embedding")
+                logger.debug(f"Mapped field {field} to embedding in SELECT clause")
+            else:
+                select_clause.append(field)
 
         # 添加高亮
         for field in highlightFields:
@@ -586,12 +592,32 @@ class PDConnection(DocStoreConnection):
                             vector_size = len(vector_data)
                         else:
                             try:
-                                vector_data = vector_data.tolist() if hasattr(vector_data, 'tolist') else list(vector_data)
+                                # 处理PostgreSQL向量类型
+                                if hasattr(vector_data, 'tolist'):
+                                    vector_data = vector_data.tolist()
+                                else:
+                                    # 如果是字符串格式的向量，尝试解析
+                                    if isinstance(vector_data, str):
+                                        # 移除方括号并分割
+                                        vector_str = vector_data.strip('[]')
+                                        vector_data = [float(x.strip()) for x in vector_str.split(',')]
+                                    else:
+                                        vector_data = list(vector_data)
                                 vector_size = len(vector_data)
-                            except:
+                            except Exception as e:
+                                logger.warning(f"Failed to parse vector data: {e}")
                                 vector_size = 1024  # 默认向量大小
-                                vector_data = []
-                        row_dict[f'q_{vector_size}_vec'] = vector_data
+                                vector_data = [0.0] * vector_size
+                        
+                        # 检查selectFields中是否有对应的q_*_vec字段请求
+                        target_field = f'q_{vector_size}_vec'
+                        for field in selectFields:
+                            if vector_field_pattern.match(field):
+                                target_field = field
+                                break
+                        
+                        row_dict[target_field] = vector_data
+                        logger.debug(f"Mapped embedding back to {target_field} with {len(vector_data)} dimensions")
                     
                     # 构建ES兼容的hit格式
                     formatted_hit = {
