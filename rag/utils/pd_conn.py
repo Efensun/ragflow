@@ -205,11 +205,17 @@ class PDConnection(DocStoreConnection):
     def createIdx(self, indexName: str, knowledgebaseId: str, vectorSize: int):
         # 检查表是否已存在
         if self.indexExist(indexName):
-            logger.info(f"Table {indexName} already exists, checking schema...")
+            logger.info(f"Table {indexName} already exists, checking schema and indexes...")
             # 升级表结构以确保所有字段都存在
             if self._upgrade_table_schema(indexName):
                 logger.info(f"Table {indexName} schema verified/upgraded successfully")
-                return True
+                # 重建索引以确保索引字段正确
+                if self._rebuild_indexes(indexName, vectorSize):
+                    logger.info(f"Table {indexName} indexes rebuilt successfully")
+                    return True
+                else:
+                    logger.error(f"Failed to rebuild indexes for table {indexName}")
+                    return False
             else:
                 logger.error(f"Failed to verify/upgrade table {indexName} schema")
                 # 如果升级失败，尝试删除并重新创建表
@@ -1240,6 +1246,63 @@ class PDConnection(DocStoreConnection):
     def __del__(self):
         if hasattr(self, 'pool'):
             self.pool.closeall()
+
+    def _rebuild_indexes(self, indexName: str, vectorSize: int) -> bool:
+        """
+        重建表的索引，确保索引字段正确
+        """
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn.cursor() as cur:
+                logger.info(f"Rebuilding indexes for table {indexName}...")
+                
+                # 删除旧的索引
+                cur.execute(f"DROP INDEX IF EXISTS {indexName}_bm25")
+                cur.execute(f"DROP INDEX IF EXISTS {indexName}_vector_idx")
+                logger.info(f"Dropped old indexes for table {indexName}")
+                
+                # 重新创建BM25索引 - 用于全文搜索
+                cur.execute(f"""
+                    CREATE INDEX {indexName}_bm25 ON {indexName}
+                    USING bm25 (
+                        id, 
+                        content_with_weight, 
+                        content_ltks, 
+                        content_sm_ltks,
+                        title_tks,
+                        title_sm_tks,
+                        important_tks,
+                        question_tks,
+                        kb_id, 
+                        available_int, 
+                        metadata
+                    ) WITH (key_field='id');
+                """)
+                logger.info(f"Created new BM25 index for table {indexName}")
+                
+                # 重新创建向量索引 - 用于向量相似度搜索
+                cur.execute(f"""
+                    CREATE INDEX {indexName}_vector_idx 
+                    ON {indexName} 
+                    USING hnsw (embedding vector_cosine_ops)
+                    WITH (
+                        m = 16,               -- 每个节点的最大连接数
+                        ef_construction = 64  -- 构建时的搜索宽度，越大越精确但也越慢
+                    )
+                """)
+                logger.info(f"Created new vector index for table {indexName}")
+                
+                conn.commit()
+                logger.info(f"Successfully rebuilt all indexes for table {indexName}")
+                return True
+                
+        except Exception as e:
+            logger.exception(f"Failed to rebuild indexes for table {indexName}: {str(e)}")
+            return False
+        finally:
+            if conn:
+                self._return_connection(conn)
 
     def _upgrade_table_schema(self, indexName: str) -> bool:
         """
