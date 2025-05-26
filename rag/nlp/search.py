@@ -113,8 +113,13 @@ class Dealer:
                 q_vec = matchDense.embedding_data
                 src.append(f"q_{len(q_vec)}_vec")
 
-                fusionExpr = FusionExpr("weighted_sum", topk, {"weights": "0.05, 0.95"})
+                # 使用传入的权重参数，而不是硬编码的权重
+                text_weight = 1.0 - req.get("vector_similarity_weight", 0.3)
+                vector_weight = req.get("vector_similarity_weight", 0.3)
+                fusionExpr = FusionExpr("weighted_sum", topk, {"weights": f"{text_weight:.3f}, {vector_weight:.3f}"})
                 matchExprs = [matchText, matchDense, fusionExpr]
+                
+                logging.info(f"🎯 Search weights: text={text_weight:.3f}, vector={vector_weight:.3f} (from request: {req.get('vector_similarity_weight', 'not_set')})")
 
                 res = self.dataStore.search(src, highlightFields, filters, matchExprs, orderBy, offset, limit,
                                             idx_names, kb_ids, rank_feature=rank_feature)
@@ -130,6 +135,8 @@ class Dealer:
                         matchText, _ = self.qryr.question(qst, min_match=0.1)
                         filters.pop("doc_id", None)
                         matchDense.extra_options["similarity"] = 0.17
+                        # 重新创建fusionExpr以保持权重一致
+                        fusionExpr = FusionExpr("weighted_sum", topk, {"weights": f"{text_weight:.3f}, {vector_weight:.3f}"})
                         res = self.dataStore.search(src, highlightFields, filters, [matchText, matchDense, fusionExpr],
                                                     orderBy, offset, limit, idx_names, kb_ids, rank_feature=rank_feature)
                         total = self.dataStore.getTotal(res)

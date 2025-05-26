@@ -484,7 +484,7 @@ class PDConnection(DocStoreConnection):
                 vector_topn = expr.topn
                 # ParadeDB中使用固定的embedding字段名，无论原始字段名是什么
                 # 原始字段名如q_1024_vec会在insert时映射到embedding字段
-                logger.debug(f"Vector search requested with field: {expr.vector_column_name}, mapping to embedding field")
+                logger.info(f"Vector search requested with field: {expr.vector_column_name}, mapping to embedding field, topn: {vector_topn}")
 
         # 构建WHERE子句字符串
         where_clause = ""
@@ -505,15 +505,15 @@ class PDConnection(DocStoreConnection):
             # 在ORDER BY中添加向量搜索排序，确保两种搜索方式都被使用
             order_clause = [f"embedding <=> %s"]
             params.append(vector_query)
-            logger.info(f"Using hybrid search with weights: text={text_weight}, vector={vector_similarity_weight}")
+            logger.info(f"🔍 Using hybrid search with weights: text={text_weight:.3f}, vector={vector_similarity_weight:.3f}")
         elif has_vector_search:
             # 只有向量搜索
             order_clause = [f"embedding <=> %s"]
             params.append(vector_query)
-            logger.info("Using vector search only")
+            logger.info(f"🔍 Using vector search only with weight={vector_similarity_weight:.3f}")
         elif has_text_search:
             # 只有文本搜索，ParadeDB默认使用BM25排序
-            logger.info("Using text search only with BM25 ranking")
+            logger.info("🔍 Using text search only with BM25 ranking")
 
         # 如果还有其他排序条件，添加到后面
         if orderBy and orderBy.fields:
