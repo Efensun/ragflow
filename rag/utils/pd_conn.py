@@ -415,11 +415,14 @@ class PDConnection(DocStoreConnection):
             }
 
         # 构建SELECT子句 - 处理向量字段映射
-        select_clause = []
+        select_clause = ["id"]  # 始终包含 id 字段
         vector_field_pattern = re.compile(r'q_(\d+)_vec')
+
         for field in selectFields:
+            if field == "id":
+                continue  # 跳过重复的 id 字段
             # 如果是动态向量字段，映射到embedding字段
-            if vector_field_pattern.match(field):
+            elif vector_field_pattern.match(field):
                 select_clause.append("embedding")
                 logger.debug(f"Mapped field {field} to embedding in SELECT clause")
             else:
@@ -684,18 +687,18 @@ class PDConnection(DocStoreConnection):
                             # 其他字段保持None
                     
                     # 提取id作为_id，但保留在_source中
-                    doc_id = row_dict.get('id', '')
+                    chunk_id = row_dict.get('id', '')
                     
-                    logger.debug(f"Row {i}: doc_id='{doc_id}', content_preview='{str(row_dict.get('content_with_weight', ''))[:50]}...'")
+                    logger.debug(f"Row {i}: doc_id='{chunk_id}', content_preview='{str(row_dict.get('content_with_weight', ''))[:50]}...'")
                     
                     # 如果id为空，生成唯一标识
-                    if not doc_id:
+                    if not chunk_id:
                         logger.warning(f"Empty doc_id found in row {i}, generating fallback ID")
                         # 根据内容生成hash作为临时ID
                         content_hash = hashlib.md5(str(row_dict.get('content_with_weight', f'row_{i}')).encode()).hexdigest()
-                        doc_id = f"temp_{content_hash[:16]}"
-                        row_dict['id'] = doc_id  # 将生成的ID也放入_source中
-                        logger.debug(f"Generated fallback doc_id: {doc_id}")
+                        chunk_id = f"temp_{content_hash[:16]}"
+                        row_dict['id'] = chunk_id  # 将生成的ID也放入_source中
+                        logger.debug(f"Generated fallback doc_id: {chunk_id}")
                     
                     # 将embedding字段映射回动态的向量字段名以保持兼容性
                     if 'embedding' in row_dict and row_dict['embedding'] is not None:
@@ -734,7 +737,7 @@ class PDConnection(DocStoreConnection):
                     
                     # 构建ES兼容的hit格式
                     formatted_hit = {
-                        "_id": doc_id,
+                        "_id": chunk_id,
                         "_source": row_dict,
                         "_score": 1.0  # 默认评分，如果需要真实评分可以后续改进
                     }
