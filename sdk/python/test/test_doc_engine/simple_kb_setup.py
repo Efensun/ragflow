@@ -37,84 +37,207 @@ class SimpleKBSetup:
         self.es_conn = None
         self.pd_conn = None
         self.embedding_model = None
+        self.vector_dimension = 1024  # 默认向量维度
+        self.use_real_embeddings = False  # 添加标志控制是否使用真实embedding
         self.init_connections()
         self.init_embedding_model()
     
     def init_connections(self):
         """初始化数据库连接"""
         try:
-            # 初始化ES连接
-            if hasattr(settings, 'ES') and settings.ES.get('hosts'):
+            # 初始化ES连接 - 修复连接检查逻辑
+            try:
                 logger.info("初始化Elasticsearch连接...")
                 self.es_conn = ESConnection()
-                logger.info("✅ Elasticsearch连接成功")
-            else:
-                logger.warning("⚠️ 未配置Elasticsearch")
+                # 测试连接
+                if hasattr(self.es_conn, 'es') and self.es_conn.es:
+                    logger.info("✅ Elasticsearch连接成功")
+                else:
+                    logger.warning("⚠️ Elasticsearch连接对象创建成功，但可能未正确配置")
+            except Exception as e:
+                logger.warning(f"⚠️ Elasticsearch连接失败: {e}")
+                self.es_conn = None
             
             # 初始化ParadeDB连接
-            if hasattr(settings, 'PARADEDB') and settings.PARADEDB.get('host'):
+            try:
                 logger.info("初始化ParadeDB连接...")
                 self.pd_conn = PDConnection()
                 logger.info("✅ ParadeDB连接成功")
-            else:
-                logger.warning("⚠️ 未配置ParadeDB")
+            except Exception as e:
+                logger.warning(f"⚠️ ParadeDB连接失败: {e}")
+                self.pd_conn = None
                 
         except Exception as e:
             logger.error(f"❌ 初始化数据库连接失败: {e}")
-            raise
+            # 不要抛出异常，继续运行
     
     def init_embedding_model(self):
         """初始化embedding模型"""
         try:
             logger.info("初始化embedding模型...")
             
-            # 尝试使用RAGFlow的embedding模型
+            # 方法1: 直接使用OpenAI客户端调用Xinference（推荐，已验证可用）
             try:
-                from rag.nlp import EmbeddingModel
-                # 使用默认的embedding模型
-                model_name = getattr(settings, 'LLM_FACTORY', {}).get('embedding_model', 'BAAI/bge-large-zh-v1.5')
-                self.embedding_model = EmbeddingModel(model_name, "")
-                logger.info(f"✅ 使用RAGFlow embedding模型: {model_name}")
-                return
+                from openai import OpenAI
+                
+                # 使用用户提供的Xinference地址
+                xinference_client = OpenAI(
+                    api_key="empty", 
+                    base_url="http://120.77.38.66:8008/v1"
+                )
+                
+                # 测试模型是否可用
+                test_response = xinference_client.embeddings.create(
+                    input=["测试文本"],
+                    model="jina-embeddings-v3"
+                )
+                
+                if test_response.data and len(test_response.data[0].embedding) > 0:
+                    self.embedding_model = xinference_client
+                    self.vector_dimension = len(test_response.data[0].embedding)
+                    self.use_real_embeddings = True
+                    logger.info(f"✅ 使用OpenAI客户端直接调用Xinference jina-embeddings-v3模型，向量维度: {self.vector_dimension}")
+                    return
+                    
             except Exception as e:
-                logger.warning(f"无法加载RAGFlow embedding模型: {e}")
+                logger.warning(f"无法使用OpenAI客户端调用Xinference: {e}")
             
-            # 备选方案1: 使用sentence-transformers
+            # 方法2: 使用用户提供的租户ID和embedding配置（备选）
+            try:
+                from api.db.services.llm_service import LLMBundle, LLMType
+                
+                # 使用用户提供的租户ID
+                tenant_id = "c68cf3243ba311f08ca03fb4f23258b9"
+                logger.info(f"尝试使用用户提供的租户ID: {tenant_id}")
+                
+                # 尝试创建embedding模型（使用配置的jina-embeddings-v3@Xinference）
+                try:
+                    embedding_bundle = LLMBundle(tenant_id, LLMType.EMBEDDING.value)
+                    
+                    # 测试模型是否可用
+                    test_embeddings, _ = embedding_bundle.encode(["测试文本"])
+                    if test_embeddings and len(test_embeddings[0]) > 0:
+                        self.embedding_model = embedding_bundle
+                        self.vector_dimension = len(test_embeddings[0])
+                        self.use_real_embeddings = True
+                        logger.info(f"✅ 使用RAGFlow配置的jina-embeddings-v3模型，向量维度: {self.vector_dimension}")
+                        return
+                except Exception as e:
+                    logger.warning(f"无法使用RAGFlow LLMBundle: {e}")
+                    
+            except Exception as e:
+                logger.warning(f"无法导入RAGFlow LLMBundle: {e}")
+            
+            # 方法3: 尝试使用RAGFlow的XinferenceEmbed类（备选）
+            try:
+                from rag.llm.embedding_model import XinferenceEmbed
+                
+                xinference_embed = XinferenceEmbed(
+                    key="",  # Xinference通常不需要API key
+                    model_name="jina-embeddings-v3",
+                    base_url="http://120.77.38.66:8008/"
+                )
+                
+                # 测试embedding
+                test_embeddings, tokens = xinference_embed.encode(["测试文本"])
+                if test_embeddings and len(test_embeddings[0]) > 0:
+                    self.embedding_model = xinference_embed
+                    self.vector_dimension = len(test_embeddings[0])
+                    self.use_real_embeddings = True
+                    logger.info(f"✅ 使用RAGFlow XinferenceEmbed模型，向量维度: {self.vector_dimension}")
+                    return
+                    
+            except Exception as e:
+                logger.warning(f"无法使用RAGFlow XinferenceEmbed: {e}")
+            
+            # 方法4: 备选方案 - 使用sentence-transformers
             try:
                 from sentence_transformers import SentenceTransformer
+                
+                # 优先尝试jina-embeddings-v3
+                try:
+                    self.embedding_model = SentenceTransformer('jinaai/jina-embeddings-v3')
+                    test_embedding = self.embedding_model.encode("测试文本", normalize_embeddings=True)
+                    self.vector_dimension = len(test_embedding)
+                    self.use_real_embeddings = True
+                    logger.info(f"✅ 使用sentence-transformers jina-embeddings-v3模型，向量维度: {self.vector_dimension}")
+                    return
+                except Exception as e:
+                    logger.warning(f"无法加载jina-embeddings-v3: {e}")
+                
+                # 备选BAAI模型
                 model_name = 'BAAI/bge-large-zh-v1.5'
                 self.embedding_model = SentenceTransformer(model_name)
-                logger.info(f"✅ 使用sentence-transformers模型: {model_name}")
+                test_embedding = self.embedding_model.encode("测试文本", normalize_embeddings=True)
+                self.vector_dimension = len(test_embedding)
+                self.use_real_embeddings = True
+                logger.info(f"✅ 使用sentence-transformers模型: {model_name}，向量维度: {self.vector_dimension}")
                 return
             except ImportError:
-                logger.warning("sentence-transformers未安装")
+                logger.warning("sentence-transformers未安装，建议安装: pip install sentence-transformers")
             except Exception as e:
                 logger.warning(f"无法加载sentence-transformers模型: {e}")
             
-            # 备选方案2: 使用transformers
+            # 方法5: 备选方案 - 使用transformers
             try:
                 from transformers import AutoTokenizer, AutoModel
                 import torch
                 
+                # 优先尝试jina-embeddings-v3
+                try:
+                    model_name = 'jinaai/jina-embeddings-v3'
+                    self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+                    self.model = AutoModel.from_pretrained(model_name)
+                    self.embedding_model = "transformers"
+                    
+                    # 测试获取向量维度
+                    inputs = self.tokenizer("测试文本", return_tensors='pt', truncation=True, max_length=512)
+                    with torch.no_grad():
+                        outputs = self.model(**inputs)
+                        embedding = outputs.last_hidden_state[:, 0, :].squeeze()
+                        self.vector_dimension = len(embedding)
+                    
+                    self.use_real_embeddings = True
+                    logger.info(f"✅ 使用transformers jina-embeddings-v3模型，向量维度: {self.vector_dimension}")
+                    return
+                except Exception as e:
+                    logger.warning(f"无法加载transformers jina-embeddings-v3: {e}")
+                
+                # 备选BAAI模型
                 model_name = 'BAAI/bge-large-zh-v1.5'
                 self.tokenizer = AutoTokenizer.from_pretrained(model_name)
                 self.model = AutoModel.from_pretrained(model_name)
                 self.embedding_model = "transformers"
-                logger.info(f"✅ 使用transformers模型: {model_name}")
+                
+                # 测试获取向量维度
+                inputs = self.tokenizer("测试文本", return_tensors='pt', truncation=True, max_length=512)
+                with torch.no_grad():
+                    outputs = self.model(**inputs)
+                    embedding = outputs.last_hidden_state[:, 0, :].squeeze()
+                    self.vector_dimension = len(embedding)
+                
+                self.use_real_embeddings = True
+                logger.info(f"✅ 使用transformers模型: {model_name}，向量维度: {self.vector_dimension}")
                 return
             except ImportError:
-                logger.warning("transformers未安装")
+                logger.warning("transformers未安装，建议安装: pip install transformers torch")
             except Exception as e:
                 logger.warning(f"无法加载transformers模型: {e}")
             
-            # 如果所有方案都失败，使用模拟向量但给出警告
-            logger.warning("⚠️ 无法加载任何embedding模型，将使用模拟向量")
-            logger.warning("⚠️ 建议安装: pip install sentence-transformers")
+            # 如果所有方案都失败，使用模拟向量
+            logger.info("⚠️ 无法加载任何真实embedding模型，使用模拟向量进行测试")
+            logger.info("💡 这样可以测试搜索引擎的基本功能，不影响文本搜索和数据插入")
+            
+            # 使用模拟向量
             self.embedding_model = None
+            self.vector_dimension = 1024  # jina-embeddings-v3的向量维度
+            self.use_real_embeddings = False
             
         except Exception as e:
             logger.error(f"❌ embedding模型初始化失败: {e}")
             self.embedding_model = None
+            self.vector_dimension = 1024  # jina-embeddings-v3的向量维度
+            self.use_real_embeddings = False
     
     def generate_embedding(self, text: str) -> List[float]:
         """生成文本的embedding向量"""
@@ -124,20 +247,32 @@ class SimpleKBSetup:
                 logger.debug(f"使用模拟向量: {text[:50]}...")
                 hash_value = hash(text) % (2**32)
                 np.random.seed(hash_value)
-                vector = np.random.normal(0, 1, 1024)
+                vector = np.random.normal(0, 1, self.vector_dimension)
                 vector = vector / np.linalg.norm(vector)
                 return vector.tolist()
             
-            # RAGFlow embedding模型
-            if hasattr(self.embedding_model, 'encode'):
-                if hasattr(self.embedding_model, 'embed_documents'):
-                    # RAGFlow EmbeddingModel
-                    embeddings = self.embedding_model.embed_documents([text])
-                    return embeddings[0]
-                else:
-                    # sentence-transformers
-                    embedding = self.embedding_model.encode(text, normalize_embeddings=True)
-                    return embedding.tolist()
+            # OpenAI客户端（Xinference）
+            if hasattr(self.embedding_model, 'embeddings'):
+                response = self.embedding_model.embeddings.create(
+                    input=[text],
+                    model="jina-embeddings-v3"
+                )
+                return response.data[0].embedding
+            
+            # RAGFlow LLMBundle（推荐方式）
+            elif hasattr(self.embedding_model, 'encode') and hasattr(self.embedding_model, 'mdl'):
+                embeddings, _ = self.embedding_model.encode([text])
+                return embeddings[0]
+            
+            # RAGFlow embedding模型类
+            elif hasattr(self.embedding_model, 'encode') and not hasattr(self.embedding_model, 'mdl'):
+                embeddings, _ = self.embedding_model.encode([text])
+                return embeddings[0]
+            
+            # sentence-transformers
+            elif hasattr(self.embedding_model, 'encode'):
+                embedding = self.embedding_model.encode(text, normalize_embeddings=True)
+                return embedding.tolist()
             
             # transformers模型
             elif self.embedding_model == "transformers":
@@ -159,7 +294,7 @@ class SimpleKBSetup:
             # 使用文本hash作为种子，确保相同文本生成相同向量
             hash_value = hash(text) % (2**32)
             np.random.seed(hash_value)
-            vector = np.random.normal(0, 1, 1024)
+            vector = np.random.normal(0, 1, self.vector_dimension)
             vector = vector / np.linalg.norm(vector)
             return vector.tolist()
     
@@ -167,9 +302,12 @@ class SimpleKBSetup:
         """生成UUID"""
         return str(uuid.uuid4())
     
-    def create_indexes(self, index_name: str, kb_id: str, vector_size: int = 1024):
+    def create_indexes(self, index_name: str, kb_id: str, vector_size: int = None):
         """在ES和ParadeDB中创建索引"""
-        logger.info(f"创建索引: {index_name}")
+        if vector_size is None:
+            vector_size = self.vector_dimension
+            
+        logger.info(f"创建索引: {index_name}，向量维度: {vector_size}")
         
         # 创建ES索引
         if self.es_conn:
@@ -268,6 +406,9 @@ class SimpleKBSetup:
             logger.info(f"生成embedding向量 {i+1}/{count}: {content_data['title']}")
             vector = self.generate_embedding(full_text)
             
+            # 动态生成向量字段名
+            vector_field_name = f"q_{self.vector_dimension}_vec"
+            
             doc = {
                 "id": chunk_id,
                 "kb_id": kb_id,
@@ -291,13 +432,15 @@ class SimpleKBSetup:
                 "page_num_int": [1],
                 "top_int": [0],
                 "position_int": [0],
-                f"q_1024_vec": vector,
+                vector_field_name: vector,
                 "metadata": {
                     "source": "test_data",
                     "type": "text",
                     "language": "zh",
                     "index": i,
-                    "embedding_model": str(type(self.embedding_model).__name__) if self.embedding_model else "simulated"
+                    "embedding_model": str(type(self.embedding_model).__name__) if self.embedding_model else "simulated",
+                    "vector_dimension": self.vector_dimension,
+                    "vector_field": vector_field_name
                 }
             }
             documents.append(doc)
@@ -474,13 +617,46 @@ def main():
         # 初始化设置器
         setup = SimpleKBSetup()
         
+        # 检查连接状态
+        print(f"\n🔗 连接状态检查:")
+        print(f"  Elasticsearch: {'✅ 已连接' if setup.es_conn else '❌ 未连接'}")
+        print(f"  ParadeDB: {'✅ 已连接' if setup.pd_conn else '❌ 未连接'}")
+        print(f"  Embedding模型: {'✅ 真实模型' if setup.use_real_embeddings else '⚠️ 模拟向量'}")
+        
         if not setup.es_conn and not setup.pd_conn:
-            print("❌ 没有可用的搜索引擎连接")
+            print("\n❌ 没有可用的搜索引擎连接")
+            print("\n🔧 诊断建议:")
+            print("1. 检查Elasticsearch配置:")
+            print("   - 确保ES服务正在运行")
+            print("   - 检查 rag/settings.py 中的ES配置")
+            print("   - 验证ES连接地址和端口")
+            print("\n2. 检查ParadeDB配置:")
+            print("   - 确保ParadeDB服务正在运行")
+            print("   - 检查 rag/settings.py 中的PARADEDB配置")
+            print("   - 验证数据库连接参数")
+            print("\n3. 或者运行之前成功的隔离测试:")
+            print("   python sdk/python/test/test_doc_engine/test_kb_isolation.py")
             return
+        
+        # 如果只有一个引擎可用，继续运行
+        available_engines = []
+        if setup.es_conn:
+            available_engines.append("Elasticsearch")
+        if setup.pd_conn:
+            available_engines.append("ParadeDB")
+        
+        print(f"\n✅ 可用的搜索引擎: {', '.join(available_engines)}")
+        
+        if not setup.use_real_embeddings:
+            print(f"\n⚠️ 注意: 使用模拟向量进行测试")
+            print(f"  - 可以测试文本搜索功能")
+            print(f"  - 可以测试数据插入和基本搜索")
+            print(f"  - 无法验证真实的语义相关性")
+            print(f"  - 如需真实embedding，请解决jina-embeddings-v3权限问题")
         
         # 设置知识库
         result = setup.setup_test_knowledge_base(
-            kb_name="ES与ParadeDB对比测试知识库（真实向量）",
+            kb_name="ES与ParadeDB对比测试知识库（模拟向量版）",
             document_count=20
         )
         
@@ -490,7 +666,8 @@ def main():
         print(f"  索引名称: {result['index_name']}")
         print(f"  租户ID: {result['tenant_id']}")
         print(f"  文档数量: {result['document_count']}")
-        print(f"  Embedding模型: {str(type(setup.embedding_model).__name__) if setup.embedding_model else 'simulated'}")
+        print(f"  向量维度: {setup.vector_dimension}")
+        print(f"  Embedding类型: {'真实模型' if setup.use_real_embeddings else '模拟向量'}")
         print(f"  ES插入成功: {'✅' if result['es_success'] else '❌'}")
         print(f"  ParadeDB插入成功: {'✅' if result['pd_success'] else '❌'}")
         
@@ -516,9 +693,10 @@ def main():
             print(f"\n🎉 知识库设置成功!")
             
             # 生成测试配置
-            config_content = f'''# 自动生成的搜索对比测试配置（使用真实embedding向量）
+            embedding_type = "真实向量" if setup.use_real_embeddings else "模拟向量"
+            config_content = f'''# 自动生成的搜索对比测试配置（{embedding_type}）
 # 生成时间: {time.strftime("%Y-%m-%d %H:%M:%S")}
-# Embedding模型: {str(type(setup.embedding_model).__name__) if setup.embedding_model else 'simulated'}
+# Embedding类型: {embedding_type}
 
 INDEX_NAME = "{result['index_name']}"
 KB_ID = "{result['kb_id']}"
@@ -564,7 +742,12 @@ COMPARISON_CONFIG = {{
             print(f"\n💡 现在可以运行搜索对比测试:")
             print(f"  python quick_search_test.py")
             print(f"  python compare_search_engines.py")
-            print(f"\n🎯 使用真实embedding向量，可以验证语义相关性！")
+            
+            if setup.use_real_embeddings:
+                print(f"\n🎯 使用真实embedding向量，可以验证语义相关性！")
+            else:
+                print(f"\n⚠️ 使用模拟向量，主要测试搜索引擎基本功能")
+                print(f"💡 要使用真实embedding，需要解决jina-embeddings-v3权限问题")
             
         else:
             print(f"\n❌ 知识库设置失败，请检查日志")

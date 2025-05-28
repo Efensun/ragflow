@@ -75,7 +75,9 @@ class SearchEngineComparator:
     def __init__(self):
         self.es_conn = None
         self.pd_conn = None
+        self.vector_dimension = 1024  # 默认向量维度
         self.init_connections()
+        self.detect_vector_dimension()
     
     def init_connections(self):
         """初始化数据库连接"""
@@ -99,6 +101,70 @@ class SearchEngineComparator:
         except Exception as e:
             logger.error(f"❌ 初始化数据库连接失败: {e}")
             raise
+    
+    def detect_vector_dimension(self):
+        """自动检测向量维度"""
+        try:
+            # 尝试从配置文件中获取向量维度
+            try:
+                from test_kb_config import TEST_CONFIG
+                # 从测试配置中获取一个样本文档的向量维度
+                index_name = TEST_CONFIG["index_name"]
+                kb_ids = TEST_CONFIG["kb_ids"]
+                
+                # 尝试从ES获取样本文档
+                if self.es_conn:
+                    from rag.utils.doc_store_conn import OrderByExpr
+                    res = self.es_conn.search(
+                        selectFields=["metadata"],
+                        highlightFields=[],
+                        condition={"available_int": 1},
+                        matchExprs=[],
+                        orderBy=OrderByExpr(),
+                        offset=0,
+                        limit=1,
+                        indexNames=index_name,
+                        knowledgebaseIds=kb_ids
+                    )
+                    hits = res.get("hits", {}).get("hits", [])
+                    if hits:
+                        metadata = hits[0].get("_source", {}).get("metadata", {})
+                        if "vector_dimension" in metadata:
+                            self.vector_dimension = metadata["vector_dimension"]
+                            logger.info(f"✅ 从ES样本文档检测到向量维度: {self.vector_dimension}")
+                            return
+                
+                # 如果ES没有找到，尝试从ParadeDB获取
+                if self.pd_conn:
+                    from rag.utils.doc_store_conn import OrderByExpr
+                    res = self.pd_conn.search(
+                        selectFields=["metadata"],
+                        highlightFields=[],
+                        condition={"available_int": 1},
+                        matchExprs=[],
+                        orderBy=OrderByExpr(),
+                        offset=0,
+                        limit=1,
+                        indexNames=index_name,
+                        knowledgebaseIds=kb_ids
+                    )
+                    hits = res.get("hits", {}).get("hits", [])
+                    if hits:
+                        metadata = hits[0].get("_source", {}).get("metadata", {})
+                        if "vector_dimension" in metadata:
+                            self.vector_dimension = metadata["vector_dimension"]
+                            logger.info(f"✅ 从ParadeDB样本文档检测到向量维度: {self.vector_dimension}")
+                            return
+                            
+            except ImportError:
+                logger.info("未找到test_kb_config.py，使用默认向量维度")
+            except Exception as e:
+                logger.warning(f"从配置文件检测向量维度失败: {e}")
+            
+            logger.info(f"使用默认向量维度: {self.vector_dimension}")
+            
+        except Exception as e:
+            logger.warning(f"向量维度检测失败: {e}，使用默认值: {self.vector_dimension}")
     
     def generate_test_vector(self, dimension: int = 1024) -> List[float]:
         """生成测试向量"""
@@ -163,8 +229,8 @@ class SearchEngineComparator:
                           vector_weight: float = 0.5, limit: int = 20) -> List[SearchResult]:
         """使用指定引擎进行搜索"""
         try:
-            # 创建搜索表达式
-            match_exprs = self.create_search_expressions(query_text, 1024, vector_weight)
+            # 创建搜索表达式，使用检测到的向量维度
+            match_exprs = self.create_search_expressions(query_text, self.vector_dimension, vector_weight)
             
             # 搜索参数 - 使用配置文件中的设置
             if CONFIG and 'test' in CONFIG:

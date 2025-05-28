@@ -28,6 +28,9 @@ import re
 import copy
 import hashlib
 from rag.nlp import rag_tokenizer
+from typing import List, Any, Dict
+import psycopg2.extras
+from api.utils import get_uuid
 
 ATTEMPT_TIME = 2
 logger = logging.getLogger('ragflow.pd_conn')
@@ -58,12 +61,17 @@ class PDConnection(DocStoreConnection):
                     password=settings.PARADEDB["password"]
                 )
 
-                # 测试连接
+                # 测试连接并注册JSON适配器
                 conn = self._get_connection()
                 try:
                     with conn.cursor() as cur:
                         cur.execute("SELECT version()")
                         self.info["version"] = cur.fetchone()[0]
+                        
+                    # 注册JSON适配器，让psycopg2能够处理Python的dict和list
+                    # 需要在有连接的情况下注册
+                    psycopg2.extras.register_json(conn.conn if hasattr(conn, 'conn') else conn)
+                    logger.debug("Successfully registered JSON adapter for psycopg2")
                 finally:
                     # 确保测试连接归还到池中
                     self._return_connection(conn)
@@ -874,20 +882,41 @@ class PDConnection(DocStoreConnection):
                         if embedding_data is not None:
                             doc_copy["embedding"] = embedding_data
                         
-                        # 处理可能包含数组或复杂数据的字段，确保它们能正确存储到JSONB字段中
-                        jsonb_fields = {'position_int', 'page_num_int', 'top_int', 'weight_int', 'weight_flt', 'rank_int', 'rank_flt'}
-                        for field_name in jsonb_fields:
-                            if field_name in doc_copy:
+                        # 处理需要转换为JSONB的字段
+                        jsonb_fields = {
+                            'position_int', 'page_num_int', 'top_int', 'weight_int', 'weight_flt', 
+                            'rank_int', 'rank_flt', 'important_kwd', 'question_kwd', 'metadata'
+                        }
+                        
+                        for field_name in list(doc_copy.keys()):
+                            if field_name in jsonb_fields:
                                 value = doc_copy[field_name]
-                                # 如果值不是None且不是字符串，将其转换为JSON字符串
-                                if value is not None and not isinstance(value, str):
+                                # 如果值不是None，将其转换为JSON字符串
+                                if value is not None:
                                     try:
                                         import json
-                                        doc_copy[field_name] = json.dumps(value)
-                                    except (TypeError, ValueError) as e:
-                                        # 如果无法序列化，转换为字符串
-                                        doc_copy[field_name] = str(value)
-                                        logger.warning(f"Field {field_name} value {value} converted to string: {e}")
+                                        # 直接转换为JSON字符串，让PostgreSQL处理JSONB转换
+                                        if isinstance(value, (dict, list)):
+                                            doc_copy[field_name] = json.dumps(value, ensure_ascii=False)
+                                        elif isinstance(value, str):
+                                            # 如果已经是字符串，检查是否是有效的JSON
+                                            try:
+                                                # 尝试解析并重新序列化以确保格式正确
+                                                parsed = json.loads(value)
+                                                doc_copy[field_name] = json.dumps(parsed, ensure_ascii=False)
+                                            except (json.JSONDecodeError, TypeError):
+                                                # 如果不是有效JSON，将其作为字符串值包装
+                                                doc_copy[field_name] = json.dumps(value, ensure_ascii=False)
+                                        else:
+                                            # 其他类型也转换为JSON
+                                            doc_copy[field_name] = json.dumps(value, ensure_ascii=False)
+                                    except Exception as e:
+                                        # 如果JSON序列化失败，转换为字符串
+                                        doc_copy[field_name] = json.dumps(str(value), ensure_ascii=False)
+                                        logger.warning(f"Field {field_name} value {value} converted to JSON string due to error: {e}")
+                                else:
+                                    # None值保持为None
+                                    doc_copy[field_name] = None
                         
                         # 构建SQL的字段列表和占位符
                         fields = ", ".join(doc_copy.keys())
@@ -907,7 +936,7 @@ class PDConnection(DocStoreConnection):
                     except Exception as e:
                         errors.append(f"{doc.get('id', 'unknown')}:{str(e)}")
                         logger.error(f"Insert error for doc {doc.get('id', 'unknown')}: {str(e)}")
-                        conn.rollback()
+                        # 不要回滚整个事务，只记录错误并继续处理下一个文档
                         continue
 
                 conn.commit()
