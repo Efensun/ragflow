@@ -36,7 +36,9 @@ class SimpleKBSetup:
     def __init__(self):
         self.es_conn = None
         self.pd_conn = None
+        self.embedding_model = None
         self.init_connections()
+        self.init_embedding_model()
     
     def init_connections(self):
         """初始化数据库连接"""
@@ -60,6 +62,106 @@ class SimpleKBSetup:
         except Exception as e:
             logger.error(f"❌ 初始化数据库连接失败: {e}")
             raise
+    
+    def init_embedding_model(self):
+        """初始化embedding模型"""
+        try:
+            logger.info("初始化embedding模型...")
+            
+            # 尝试使用RAGFlow的embedding模型
+            try:
+                from rag.nlp import EmbeddingModel
+                # 使用默认的embedding模型
+                model_name = getattr(settings, 'LLM_FACTORY', {}).get('embedding_model', 'BAAI/bge-large-zh-v1.5')
+                self.embedding_model = EmbeddingModel(model_name, "")
+                logger.info(f"✅ 使用RAGFlow embedding模型: {model_name}")
+                return
+            except Exception as e:
+                logger.warning(f"无法加载RAGFlow embedding模型: {e}")
+            
+            # 备选方案1: 使用sentence-transformers
+            try:
+                from sentence_transformers import SentenceTransformer
+                model_name = 'BAAI/bge-large-zh-v1.5'
+                self.embedding_model = SentenceTransformer(model_name)
+                logger.info(f"✅ 使用sentence-transformers模型: {model_name}")
+                return
+            except ImportError:
+                logger.warning("sentence-transformers未安装")
+            except Exception as e:
+                logger.warning(f"无法加载sentence-transformers模型: {e}")
+            
+            # 备选方案2: 使用transformers
+            try:
+                from transformers import AutoTokenizer, AutoModel
+                import torch
+                
+                model_name = 'BAAI/bge-large-zh-v1.5'
+                self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+                self.model = AutoModel.from_pretrained(model_name)
+                self.embedding_model = "transformers"
+                logger.info(f"✅ 使用transformers模型: {model_name}")
+                return
+            except ImportError:
+                logger.warning("transformers未安装")
+            except Exception as e:
+                logger.warning(f"无法加载transformers模型: {e}")
+            
+            # 如果所有方案都失败，使用模拟向量但给出警告
+            logger.warning("⚠️ 无法加载任何embedding模型，将使用模拟向量")
+            logger.warning("⚠️ 建议安装: pip install sentence-transformers")
+            self.embedding_model = None
+            
+        except Exception as e:
+            logger.error(f"❌ embedding模型初始化失败: {e}")
+            self.embedding_model = None
+    
+    def generate_embedding(self, text: str) -> List[float]:
+        """生成文本的embedding向量"""
+        try:
+            if self.embedding_model is None:
+                # 使用模拟向量作为备选
+                logger.debug(f"使用模拟向量: {text[:50]}...")
+                hash_value = hash(text) % (2**32)
+                np.random.seed(hash_value)
+                vector = np.random.normal(0, 1, 1024)
+                vector = vector / np.linalg.norm(vector)
+                return vector.tolist()
+            
+            # RAGFlow embedding模型
+            if hasattr(self.embedding_model, 'encode'):
+                if hasattr(self.embedding_model, 'embed_documents'):
+                    # RAGFlow EmbeddingModel
+                    embeddings = self.embedding_model.embed_documents([text])
+                    return embeddings[0]
+                else:
+                    # sentence-transformers
+                    embedding = self.embedding_model.encode(text, normalize_embeddings=True)
+                    return embedding.tolist()
+            
+            # transformers模型
+            elif self.embedding_model == "transformers":
+                import torch
+                inputs = self.tokenizer(text, return_tensors='pt', truncation=True, max_length=512)
+                with torch.no_grad():
+                    outputs = self.model(**inputs)
+                    # 使用[CLS] token的embedding
+                    embedding = outputs.last_hidden_state[:, 0, :].squeeze()
+                    # 归一化
+                    embedding = embedding / torch.norm(embedding)
+                    return embedding.numpy().tolist()
+            
+            else:
+                raise Exception("未知的embedding模型类型")
+                
+        except Exception as e:
+            logger.warning(f"生成embedding失败: {e}，使用模拟向量")
+            # 使用文本hash作为种子，确保相同文本生成相同向量
+            hash_value = hash(text) % (2**32)
+            np.random.seed(hash_value)
+            vector = np.random.normal(0, 1, 1024)
+            vector = vector / np.linalg.norm(vector)
+            return vector.tolist()
     
     def generate_uuid(self) -> str:
         """生成UUID"""
@@ -157,14 +259,14 @@ class SimpleKBSetup:
         for i in range(count):
             content_data = sample_contents[i % len(sample_contents)]
             
-            # 生成确定性的随机向量（基于索引）
-            np.random.seed(42 + i)
-            vector = np.random.normal(0, 1, 1024)
-            vector = vector / np.linalg.norm(vector)
-            
             # 生成文档ID
             doc_id = self.generate_uuid()
             chunk_id = self.generate_uuid()
+            
+            # 生成真实的embedding向量
+            full_text = f"{content_data['title']} {content_data['content']}"
+            logger.info(f"生成embedding向量 {i+1}/{count}: {content_data['title']}")
+            vector = self.generate_embedding(full_text)
             
             doc = {
                 "id": chunk_id,
@@ -189,17 +291,18 @@ class SimpleKBSetup:
                 "page_num_int": [1],
                 "top_int": [0],
                 "position_int": [0],
-                f"q_1024_vec": vector.tolist(),
+                f"q_1024_vec": vector,
                 "metadata": {
                     "source": "test_data",
                     "type": "text",
                     "language": "zh",
-                    "index": i
+                    "index": i,
+                    "embedding_model": str(type(self.embedding_model).__name__) if self.embedding_model else "simulated"
                 }
             }
             documents.append(doc)
         
-        logger.info(f"✅ 生成了 {len(documents)} 个示例文档")
+        logger.info(f"✅ 生成了 {len(documents)} 个示例文档（使用真实embedding向量）")
         return documents
     
     def insert_documents(self, documents: List[Dict], index_name: str, kb_id: str):
@@ -364,8 +467,8 @@ class SimpleKBSetup:
 
 def main():
     """主函数"""
-    print("🚀 简化知识库设置工具")
-    print("=" * 40)
+    print("🚀 简化知识库设置工具（使用真实embedding向量）")
+    print("=" * 50)
     
     try:
         # 初始化设置器
@@ -377,7 +480,7 @@ def main():
         
         # 设置知识库
         result = setup.setup_test_knowledge_base(
-            kb_name="ES与ParadeDB对比测试知识库",
+            kb_name="ES与ParadeDB对比测试知识库（真实向量）",
             document_count=20
         )
         
@@ -387,6 +490,7 @@ def main():
         print(f"  索引名称: {result['index_name']}")
         print(f"  租户ID: {result['tenant_id']}")
         print(f"  文档数量: {result['document_count']}")
+        print(f"  Embedding模型: {str(type(setup.embedding_model).__name__) if setup.embedding_model else 'simulated'}")
         print(f"  ES插入成功: {'✅' if result['es_success'] else '❌'}")
         print(f"  ParadeDB插入成功: {'✅' if result['pd_success'] else '❌'}")
         
@@ -412,8 +516,9 @@ def main():
             print(f"\n🎉 知识库设置成功!")
             
             # 生成测试配置
-            config_content = f'''# 自动生成的搜索对比测试配置
+            config_content = f'''# 自动生成的搜索对比测试配置（使用真实embedding向量）
 # 生成时间: {time.strftime("%Y-%m-%d %H:%M:%S")}
+# Embedding模型: {str(type(setup.embedding_model).__name__) if setup.embedding_model else 'simulated'}
 
 INDEX_NAME = "{result['index_name']}"
 KB_ID = "{result['kb_id']}"
@@ -424,16 +529,22 @@ TEST_CONFIG = {{
     "index_name": "{result['index_name']}",
     "kb_ids": ["{result['kb_id']}"],
     "test_queries": [
-        "人工智能",
-        "机器学习", 
-        "自然语言处理",
-        "数据科学",
-        "云计算",
-        "区块链",
-        "Zendesk",
-        "API接口",
-        "数据库",
-        "软件开发"
+        "人工智能基础知识",
+        "机器学习算法", 
+        "自然语言处理技术",
+        "数据科学分析",
+        "云计算平台",
+        "区块链技术",
+        "Zendesk客户服务",
+        "API接口设计",
+        "数据库管理",
+        "软件开发实践",
+        # 语义相关的查询
+        "AI和深度学习",
+        "NLP和文本分析",
+        "大数据处理",
+        "分布式系统",
+        "客户支持平台"
     ]
 }}
 
@@ -441,7 +552,7 @@ TEST_CONFIG = {{
 COMPARISON_CONFIG = {{
     "index_name": "{result['index_name']}",
     "kb_ids": ["{result['kb_id']}"],
-    "vector_weights": [0.3, 0.5, 0.7],
+    "vector_weights": [0.2, 0.3, 0.5, 0.7, 0.8],  # 更多权重测试
     "test_queries": TEST_CONFIG["test_queries"]
 }}
 '''
@@ -453,6 +564,7 @@ COMPARISON_CONFIG = {{
             print(f"\n💡 现在可以运行搜索对比测试:")
             print(f"  python quick_search_test.py")
             print(f"  python compare_search_engines.py")
+            print(f"\n🎯 使用真实embedding向量，可以验证语义相关性！")
             
         else:
             print(f"\n❌ 知识库设置失败，请检查日志")
