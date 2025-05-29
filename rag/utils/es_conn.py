@@ -153,6 +153,10 @@ class ESConnection(DocStoreConnection):
         bqry = Q("bool", must=[])
         condition["kb_id"] = knowledgebaseIds
         for k, v in condition.items():
+            # 跳过非搜索条件的参数
+            if k in ["vector_similarity_weight"]:
+                continue
+                
             if k == "available_int":
                 if v == 0:
                     bqry.filter.append(Q("range", available_int={"lt": 1}))

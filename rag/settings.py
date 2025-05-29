@@ -26,7 +26,7 @@ STORAGE_IMPL_TYPE = os.getenv('STORAGE_IMPL', 'MINIO')
 # DOC_ENGINE = os.getenv('DOC_ENGINE', 'elasticsearch')
 DOC_ENGINE = os.getenv('DOC_ENGINE', 'paradedb')
 
-ES = {}
+ES = {} #测试的时候也要读取配置
 INFINITY = {}
 AZURE = {}
 S3 = {}
