@@ -91,3 +91,9 @@ paradedb:
 #   switch: false
 #   component: false
 #   dataset: false
+zendesk:
+   app_id: '682d78bb5221c34405e9bf87'
+   key_id: 'app_6837d4b28660dd5cca62c1ef'
+   secret: 'XtyoMV5N6i0hOQ-HB7FIbqAaDMcUpwvBoEpHyOB9i2AUGtZQ8CzUm7rjjxkqrwuckm07L2yMq7CNtH4ErCJRBw'
+   auth_type: 'basic'
+   base_url: 'https://api.smooch.io'

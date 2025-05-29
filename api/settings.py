@@ -57,6 +57,9 @@ HTTP_APP_KEY = None
 GITHUB_OAUTH = None
 FEISHU_OAUTH = None
 
+# zendesk integration
+ZENDESK_CONFIG = None
+
 DOC_ENGINE = None
 docStoreConn = None
 
@@ -119,7 +122,7 @@ def init_settings():
         RAG_FLOW_SERVICE_NAME,
         {}).get("secret_key", str(date.today()))
 
-    global AUTHENTICATION_CONF, CLIENT_AUTHENTICATION, HTTP_APP_KEY, GITHUB_OAUTH, FEISHU_OAUTH
+    global AUTHENTICATION_CONF, CLIENT_AUTHENTICATION, HTTP_APP_KEY, GITHUB_OAUTH, FEISHU_OAUTH, ZENDESK_CONFIG
     # authentication
     AUTHENTICATION_CONF = get_base_config("authentication", {})
 
@@ -130,9 +133,12 @@ def init_settings():
     HTTP_APP_KEY = AUTHENTICATION_CONF.get("client", {}).get("http_app_key")
     GITHUB_OAUTH = get_base_config("oauth", {}).get("github")
     FEISHU_OAUTH = get_base_config("oauth", {}).get("feishu")
+    
+    # zendesk integration
+    ZENDESK_CONFIG = get_base_config("zendesk", {})
 
     global DOC_ENGINE, docStoreConn, retrievaler, kg_retrievaler
-    DOC_ENGINE = os.environ.get('DOC_ENGINE', "elasticsearch")
+    DOC_ENGINE = os.environ.get('DOC_ENGINE', "paradedb")
     lower_case_doc_engine = DOC_ENGINE.lower()
     if lower_case_doc_engine == "elasticsearch":
         docStoreConn = rag.utils.es_conn.ESConnection()
