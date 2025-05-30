@@ -49,3 +49,5 @@ nltk_data/
 /libssl1.1_1.1.1f-1ubuntu2_arm64.deb
 /tika-server-standard-3.0.0.jar
 /tika-server-standard-3.0.0.jar.md5
+/api/jobs/data/
+/api/jobs/logs/
