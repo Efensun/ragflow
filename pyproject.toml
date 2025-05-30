@@ -127,6 +127,7 @@ dependencies = [
     "langfuse>=2.60.0",
     "debugpy>=1.8.13",
     "schedule>=1.2.2",
+    "html2text>=2024.2.26",
 ]
 
 [project.optional-dependencies]
