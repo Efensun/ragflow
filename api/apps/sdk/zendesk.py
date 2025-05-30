@@ -4,6 +4,7 @@ import base64
 from flask import request
 import uuid
 import json
+import re  # 用于正则表达式处理markdown图片
 
 from api.utils.api_utils import get_result, get_error_data_result, token_required
 from api import settings
@@ -15,6 +16,44 @@ def get_zendesk_config():
     动态获取Zendesk配置，避免导入时机问题
     """
     return settings.ZENDESK_CONFIG or {}
+
+
+def convert_markdown_images_to_links(text: str) -> str:
+    """
+    将markdown图片语法转换为链接形式，以便在Zendesk中正确显示
+    
+    Args:
+        text: 包含markdown图片语法的文本
+        
+    Returns:
+        str: 转换后的文本，图片变为可点击链接
+    """
+    try:
+        # 正则表达式匹配markdown图片语法：![alt text](url)
+        image_pattern = r'!\[([^\]]*)\]\(([^)]+)\)'
+        
+        def replace_image(match):
+            alt_text = match.group(1) or "查看图片"  # 如果没有alt文本，使用默认文本
+            image_url = match.group(2)
+            
+            # 转换为链接形式，添加图片emoji作为视觉提示
+            return f"📷 [{alt_text}]({image_url})"
+        
+        # 执行替换
+        converted_text = re.sub(image_pattern, replace_image, text)
+        
+        # 如果发生了转换，记录日志
+        if converted_text != text:
+            image_count = len(re.findall(image_pattern, text))
+            logging.info(f"Converted {image_count} markdown images to clickable links")
+            logging.debug(f"Original text: {text[:200]}...")
+            logging.debug(f"Converted text: {converted_text[:200]}...")
+        
+        return converted_text
+        
+    except Exception as e:
+        logging.error(f"Error converting markdown images to links: {e}")
+        return text  # 出错时返回原文本
 
 
 def get_auth_headers():
@@ -137,7 +176,7 @@ def call_ragflow_assistant(user_message: str, user_id: str, conversation_id: str
                         answer = str(data) if data else "抱歉，获取回复时出现格式问题。"
                     
                     if answer:
-                        logging.info(f"Got answer from RAGFlow: {answer[:100]}...")
+                        logging.info(f"Got answer from RAGFlow: {answer}")
                         return answer
                     else:
                         logging.warning("Empty answer from RAGFlow")
@@ -329,11 +368,11 @@ def handle_webhook():
 def send_reply(conversation_id: str, text: str) -> bool:
     """
     Send reply message to Zendesk conversation.
-    根据 Smooch.io API 文档使用正确的鉴权方式
+    将markdown图片转换为链接形式，并使用markdownText发送
     
     Args:
         conversation_id: 对话ID
-        text: 回复内容
+        text: 回复内容（markdown格式）
         
     Returns:
         bool: 发送是否成功
@@ -351,6 +390,9 @@ def send_reply(conversation_id: str, text: str) -> bool:
         # 使用正确的鉴权方式
         headers = get_auth_headers()
         
+        # 将markdown图片转换为链接形式
+        processed_text = convert_markdown_images_to_links(text)
+        
         payload = {
             "author": {
                 "type": "business",
@@ -358,11 +400,13 @@ def send_reply(conversation_id: str, text: str) -> bool:
             },
             "content": {
                 "type": "text",
-                "markdownText": text  # 使用markdownText支持markdown格式渲染
+                "markdownText": processed_text  # 使用markdownText发送处理后的内容
             }
         }
 
-        logging.info(f"Sending message to conversation {conversation_id} with auth type: {auth_type}")
+        logging.info(f"Sending markdown message to conversation {conversation_id} with auth type: {auth_type}")
+        logging.debug(f"Final payload: {json.dumps(payload, indent=2)}")
+        
         response = requests.post(url, json=payload, headers=headers, timeout=30)
         
         if response.status_code in [200, 201]:
@@ -371,7 +415,7 @@ def send_reply(conversation_id: str, text: str) -> bool:
         else:
             logging.error(f"Failed to send reply: {response.status_code} - {response.text}")
             logging.error(f"Request URL: {url}")
-            logging.error(f"Request payload: {payload}")
+            logging.error(f"Request payload: {json.dumps(payload, indent=2)}")
             return False
             
     except Exception as e:
