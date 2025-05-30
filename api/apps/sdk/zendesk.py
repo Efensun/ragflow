@@ -358,7 +358,7 @@ def send_reply(conversation_id: str, text: str) -> bool:
             },
             "content": {
                 "type": "text",
-                "text": text
+                "markdownText": text  # 使用markdownText支持markdown格式渲染
             }
         }
 
