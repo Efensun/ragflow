@@ -97,3 +97,6 @@ zendesk:
    secret: 'XtyoMV5N6i0hOQ-HB7FIbqAaDMcUpwvBoEpHyOB9i2AUGtZQ8CzUm7rjjxkqrwuckm07L2yMq7CNtH4ErCJRBw'
    auth_type: 'basic'
    base_url: 'https://api.smooch.io'
+   # RAGFlow Assistant Configuration
+   assistant_id: '8d8f7f323c7611f0bbd97507ed6ad8ea'  # test助理
+   api_token: 'ragflow-RhNjQ1YzFhM2JjYzExZjA5MWNlYTFhOW'  # 现有API令牌
