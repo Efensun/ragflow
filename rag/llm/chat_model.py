@@ -178,8 +178,8 @@ class Base(ABC):
     def chat(self, system, history, gen_conf):
         if system:
             history.insert(0, {"role": "system", "content": system})
-        if "max_tokens" not in gen_conf:
-            gen_conf["max_tokens"] = 32768
+        # if "max_tokens" not in gen_conf:
+        #     gen_conf["max_tokens"] = 32768
 
         logging.info(f"final args chat_streamly: {gen_conf}")
         # Implement exponential backoff retry strategy
@@ -229,8 +229,8 @@ class Base(ABC):
         return final_tool_calls
 
     def chat_streamly_with_tools(self, system: str, history: list, gen_conf: dict):
-        if "max_tokens" not in gen_conf:
-            gen_conf["max_tokens"] = 32768
+        # if "max_tokens" not in gen_conf:
+        #     gen_conf["max_tokens"] = 32768
 
         tools = self.tools
 
@@ -339,8 +339,8 @@ class Base(ABC):
         if system:
             history.insert(0, {"role": "system", "content": system})
 
-        if "max_tokens" not in gen_conf:
-            gen_conf["max_tokens"] = 32768
+        # if "max_tokens" not in gen_conf:
+        #     gen_conf["max_tokens"] = 32768
 
         logging.info(f"final args chat_streamly: {gen_conf}")
         ans = ""
@@ -976,15 +976,15 @@ class LocalAIChat(Base):
 
     def chat(self, system, history, gen_conf):
         # 将max_tokens改名为max_completion_tokens
-        if "max_tokens" not in  gen_conf:
-            gen_conf["max_completion_tokens"] = 32768
+        # if "max_tokens" not in  gen_conf:
+        #     gen_conf["max_completion_tokens"] = 32768
         logging.info(f'use max_completion_tokens,{gen_conf}')
         return super().chat(system, history, gen_conf)
 
     def chat_streamly(self, system, history, gen_conf):
         # 将max_tokens改名为max_completion_tokens
-        if "max_tokens" not in gen_conf:
-            gen_conf["max_completion_tokens"] = 32768
+        # if "max_tokens" not in gen_conf:
+        #     gen_conf["max_completion_tokens"] = 32768
         logging.info(f'use max_completion_tokens,{gen_conf}')
         return super().chat_streamly(system, history, gen_conf)
 
