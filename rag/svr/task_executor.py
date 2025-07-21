@@ -494,33 +494,50 @@ async def contextual_retrieval(chunks, doc, parser_config, chat_model, progress_
             progress_callback(msg="上下文检索配置不完整，跳过上下文添加")
         return chunks
     
-    # 尝试获取完整文档内容
-    doc_id = doc.get("id") or chunks[0].get("doc_id", "")
-    kb_id = chunks[0].get("kb_id", "")
     
-    if not doc_id or not kb_id:
+    doc_id = doc.get("id") or chunks[0].get("doc_id", "")
+    
+    if not doc_id:
         if progress_callback:
-            progress_callback(msg="无法确定文档ID或知识库ID，跳过上下文添加")
+            progress_callback(msg="无法确定文档ID，跳过上下文添加")
         return chunks
     
-    # 使用fetch_full_doc_from_storage函数尝试获取完整文档
+ 
     try:
         from rag.nlp.search import fetch_full_doc_from_storage
         
         if progress_callback:
             progress_callback(msg=f"尝试获取完整文档内容 (doc_id: {doc_id})...")
         
-        full_doc_content = await trio.to_thread.run_sync(
-            lambda: fetch_full_doc_from_storage(doc_id, kb_id)
+   
+        bucket, name = await trio.to_thread.run_sync(
+            lambda: File2DocumentService.get_storage_address(doc_id=doc_id)
         )
         
-        # 如果无法获取文档内容，可能是二进制文件或其他问题
-        if not full_doc_content:
+        
+        file_content_bytes = await trio.to_thread.run_sync(
+            lambda: STORAGE_IMPL.get(bucket, name)
+        )
+        
+        if not file_content_bytes:
             if progress_callback:
-                progress_callback(msg="无法获取完整文档内容，可能是二进制文件，跳过上下文添加")
+                progress_callback(msg="无法获取完整文档内容，跳过上下文添加")
             return chunks
-            
-        # 成功获取文档内容，可以进行上下文添加
+        
+      
+        try:
+            from rag.nlp import find_codec
+            encoding = find_codec(file_content_bytes)
+            full_doc_content = file_content_bytes.decode(encoding, errors="ignore")
+        except Exception as e:
+            if progress_callback:
+                progress_callback(msg=f"无法解码文档内容: {str(e)}，跳过上下文添加")
+            return chunks
+        
+        if len(full_doc_content) > DOC_MAXIMUM_SIZE:
+            full_doc_content = full_doc_content[:DOC_MAXIMUM_SIZE] + "..."
+        
+       
         if progress_callback:
             progress_callback(msg=f"成功获取完整文档内容，开始为{len(chunks)}个文档块添加上下文信息...")
         
