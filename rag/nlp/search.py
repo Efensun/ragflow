@@ -21,7 +21,7 @@ import os
 
 import numpy as np
 
-from api.db.services.file2document_service import File2DocumentService
+
 from rag.nlp import rag_tokenizer, query
 from rag.settings import DOC_MAXIMUM_SIZE
 from rag.settings import TAG_FLD, PAGERANK_FLD
@@ -524,6 +524,7 @@ class Dealer:
         return {a.replace(".", "_"): max(1, c) for a, c in tag_fea}
 
 def fetch_full_doc_from_storage(doc_id: str) -> str | None:
+    from api.db.services.file2document_service import File2DocumentService
     """
 
     根据doc_id从MinIO获取完整的文档内容,当前解码方式只适用于纯文本
