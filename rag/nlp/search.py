@@ -445,7 +445,7 @@ class Dealer:
             logging.info(f"Fetching full documents for {len(unique_doc_ids_to_fetch)} unique doc_ids.")
             full_doc_cache = {}
             for doc_id_to_fetch, kb_id_of_doc in unique_doc_ids_to_fetch:
-                full_content = fetch_full_doc_from_storage(doc_id_to_fetch, kb_id_of_doc)
+                full_content = fetch_full_doc_from_storage(doc_id_to_fetch)
                 full_doc_cache[(doc_id_to_fetch, kb_id_of_doc)] = full_content if full_content is not None else ""
             for chunk_dict in chunks_to_return:
                 doc_id_key = chunk_dict.get("doc_id")
