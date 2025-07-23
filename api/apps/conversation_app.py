@@ -21,7 +21,6 @@ from copy import deepcopy
 import trio
 from flask import Response, request
 from flask_login import current_user, login_required
-
 from api import settings
 from api.db import LLMType
 from api.db.db_models import APIToken
@@ -59,7 +58,11 @@ def set_conversation():
         e, dia = DialogService.get_by_id(req["dialog_id"])
         if not e:
             return get_data_error_result(message="Dialog not found")
-        conv = {"id": conv_id, "dialog_id": req["dialog_id"], "name": req.get("name", "New conversation"), "message": [{"role": "assistant", "content": dia.prompt_config["prologue"]}]}
+        conv = {"id": conv_id,
+                "dialog_id": req["dialog_id"],
+                "name": req.get("name", "New conversation"),
+                "message": [{"role": "assistant", "content": dia.prompt_config["prologue"]}],
+                "user_id":current_user.id}
         ConversationService.save(**conv)
         return get_json_result(data=conv)
     except Exception as e:
@@ -191,6 +194,7 @@ def list_conversations():
         # If access is confirmed, proceed to get conversations
         convs = ConversationService.query(
             dialog_id=dialog_id,
+            user_id=current_user.id,
             order_by=ConversationService.model.create_time,
             reverse=True,
         )
