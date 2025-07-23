@@ -53,10 +53,11 @@ from api import settings
 from api.versions import get_ragflow_version
 from api.db.db_models import close_connection
 from rag.app import laws, paper, presentation, manual, qa, table, book, resume, picture, naive, one, audio, \
-    email, tag,code
+    email, tag, code
 from rag.nlp import search, rag_tokenizer
 from rag.raptor import RecursiveAbstractiveProcessing4TreeOrganizedRetrieval as Raptor
-from rag.settings import DOC_MAXIMUM_SIZE, SVR_CONSUMER_GROUP_NAME, get_svr_queue_name, get_svr_queue_names, print_rag_settings, TAG_FLD, PAGERANK_FLD
+from rag.settings import DOC_MAXIMUM_SIZE, SVR_CONSUMER_GROUP_NAME, get_svr_queue_name, get_svr_queue_names, \
+    print_rag_settings, TAG_FLD, PAGERANK_FLD
 from rag.utils import num_tokens_from_string, truncate
 from rag.utils.redis_conn import REDIS_CONN
 from rag.utils.storage_factory import STORAGE_IMPL
@@ -81,7 +82,7 @@ FACTORY = {
     ParserType.EMAIL.value: email,
     ParserType.KG.value: naive,
     ParserType.TAG.value: tag,
-    ParserType.CODE.value:code
+    ParserType.CODE.value: code
 }
 
 UNACKED_ITERATOR = None
@@ -112,19 +113,22 @@ def start_tracemalloc_and_snapshot(signum, frame):
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     snapshot_file = f"snapshot_{timestamp}.trace"
-    snapshot_file = os.path.abspath(os.path.join(get_project_base_directory(), "logs", f"{os.getpid()}_snapshot_{timestamp}.trace"))
+    snapshot_file = os.path.abspath(
+        os.path.join(get_project_base_directory(), "logs", f"{os.getpid()}_snapshot_{timestamp}.trace"))
 
     snapshot = tracemalloc.take_snapshot()
     snapshot.dump(snapshot_file)
     current, peak = tracemalloc.get_traced_memory()
     if sys.platform == "win32":
-        import  psutil
+        import psutil
         process = psutil.Process()
         max_rss = process.memory_info().rss / 1024
     else:
         import resource
         max_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    logging.info(f"taken snapshot {snapshot_file}. max RSS={max_rss / 1000:.2f} MB, current memory usage: {current / 10**6:.2f} MB, Peak memory usage: {peak / 10**6:.2f} MB")
+    logging.info(
+        f"taken snapshot {snapshot_file}. max RSS={max_rss / 1000:.2f} MB, current memory usage: {current / 10 ** 6:.2f} MB, Peak memory usage: {peak / 10 ** 6:.2f} MB")
+
 
 # SIGUSR2 handler: stop tracemalloc
 def stop_tracemalloc(signum, frame):
@@ -133,6 +137,7 @@ def stop_tracemalloc(signum, frame):
         tracemalloc.stop()
     else:
         logging.info("tracemalloc not running")
+
 
 class TaskCanceledException(Exception):
     def __init__(self, msg):
@@ -169,6 +174,7 @@ def set_progress(task_id, from_page=0, to_page=-1, prog=None, msg="Processing...
         logging.warning(f"set_progress({task_id}) got exception DoesNotExist")
     except Exception:
         logging.exception(f"set_progress({task_id}), progress: {prog}, progress_msg: {msg}, got exception")
+
 
 async def collect():
     global CONSUMER_NAME, DONE_TASKS, FAILED_TASKS
@@ -242,9 +248,11 @@ async def build_chunks(task, progress_callback):
 
     try:
         async with chunk_limiter:
-            cks = await trio.to_thread.run_sync(lambda: chunker.chunk(task["name"], binary=binary, from_page=task["from_page"],
-                                to_page=task["to_page"], lang=task["language"], callback=progress_callback,
-                                kb_id=task["kb_id"], parser_config=task["parser_config"], tenant_id=task["tenant_id"]))
+            cks = await trio.to_thread.run_sync(
+                lambda: chunker.chunk(task["name"], binary=binary, from_page=task["from_page"],
+                                      to_page=task["to_page"], lang=task["language"], callback=progress_callback,
+                                      kb_id=task["kb_id"], parser_config=task["parser_config"],
+                                      tenant_id=task["tenant_id"]))
         logging.info("Chunking({}) {}/{} done".format(timer() - st, task["location"], task["name"]))
     except TaskCanceledException:
         raise
@@ -302,12 +310,14 @@ async def build_chunks(task, progress_callback):
             cached = get_llm_cache(chat_mdl.llm_name, d["content_with_weight"], "keywords", {"topn": topn})
             if not cached:
                 async with chat_limiter:
-                    cached = await trio.to_thread.run_sync(lambda: keyword_extraction(chat_mdl, d["content_with_weight"], topn))
+                    cached = await trio.to_thread.run_sync(
+                        lambda: keyword_extraction(chat_mdl, d["content_with_weight"], topn))
                 set_llm_cache(chat_mdl.llm_name, d["content_with_weight"], cached, "keywords", {"topn": topn})
             if cached:
                 d["important_kwd"] = cached.split(",")
                 d["important_tks"] = rag_tokenizer.tokenize(" ".join(d["important_kwd"]))
             return
+
         async with trio.open_nursery() as nursery:
             for d in docs:
                 nursery.start_soon(lambda: doc_keyword_extraction(chat_mdl, d, task["parser_config"]["auto_keywords"]))
@@ -322,11 +332,13 @@ async def build_chunks(task, progress_callback):
             cached = get_llm_cache(chat_mdl.llm_name, d["content_with_weight"], "question", {"topn": topn})
             if not cached:
                 async with chat_limiter:
-                    cached = await trio.to_thread.run_sync(lambda: question_proposal(chat_mdl, d["content_with_weight"], topn))
+                    cached = await trio.to_thread.run_sync(
+                        lambda: question_proposal(chat_mdl, d["content_with_weight"], topn))
                 set_llm_cache(chat_mdl.llm_name, d["content_with_weight"], cached, "question", {"topn": topn})
             if cached:
                 d["question_kwd"] = cached.split("\n")
                 d["question_tks"] = rag_tokenizer.tokenize("\n".join(d["question_kwd"]))
+
         async with trio.open_nursery() as nursery:
             for d in docs:
                 nursery.start_soon(lambda: doc_question_proposal(chat_mdl, d, task["parser_config"]["auto_questions"]))
@@ -359,16 +371,19 @@ async def build_chunks(task, progress_callback):
         async def doc_content_tagging(chat_mdl, d, topn_tags):
             cached = get_llm_cache(chat_mdl.llm_name, d["content_with_weight"], all_tags, {"topn": topn_tags})
             if not cached:
-                picked_examples = random.choices(examples, k=2) if len(examples)>2 else examples
+                picked_examples = random.choices(examples, k=2) if len(examples) > 2 else examples
                 if not picked_examples:
                     picked_examples.append({"content": "This is an example", TAG_FLD: {'example': 1}})
                 async with chat_limiter:
-                    cached = await trio.to_thread.run_sync(lambda: content_tagging(chat_mdl, d["content_with_weight"], all_tags, picked_examples, topn=topn_tags))
+                    cached = await trio.to_thread.run_sync(
+                        lambda: content_tagging(chat_mdl, d["content_with_weight"], all_tags, picked_examples,
+                                                topn=topn_tags))
                 if cached:
                     cached = json.dumps(cached)
             if cached:
                 set_llm_cache(chat_mdl.llm_name, d["content_with_weight"], cached, all_tags, {"topn": topn_tags})
                 d[TAG_FLD] = json.loads(cached)
+
         async with trio.open_nursery() as nursery:
             for d in docs_to_tag:
                 nursery.start_soon(lambda: doc_content_tagging(chat_mdl, d, topn_tags))
@@ -405,7 +420,8 @@ async def embedding(docs, mdl, parser_config=None, callback=None):
 
     cnts_ = np.array([])
     for i in range(0, len(cnts), batch_size):
-        vts, c = await trio.to_thread.run_sync(lambda: mdl.encode([truncate(c, mdl.max_length-10) for c in cnts[i: i + batch_size]]))
+        vts, c = await trio.to_thread.run_sync(
+            lambda: mdl.encode([truncate(c, mdl.max_length - 10) for c in cnts[i: i + batch_size]]))
         if len(cnts_) == 0:
             cnts_ = vts
         else:
@@ -429,7 +445,7 @@ async def embedding(docs, mdl, parser_config=None, callback=None):
 
 async def run_raptor(row, chat_mdl, embd_mdl, vector_size, callback=None):
     chunks = []
-    vctr_nm = "q_%d_vec"%vector_size
+    vctr_nm = "q_%d_vec" % vector_size
     for d in settings.retrievaler.chunk_list(row["doc_id"], row["tenant_id"], [str(row["kb_id"])],
                                              fields=["content_with_weight", vctr_nm]):
         chunks.append((d["content_with_weight"], np.array(d[vctr_nm])))
@@ -467,6 +483,7 @@ async def run_raptor(row, chat_mdl, embd_mdl, vector_size, callback=None):
         tk_count += num_tokens_from_string(content)
     return res, tk_count
 
+
 async def contextual_retrieval(chunks, doc, parser_config, chat_model, progress_callback=None):
     """为文档块添加上下文信息以提高检索质量
     
@@ -483,86 +500,64 @@ async def contextual_retrieval(chunks, doc, parser_config, chat_model, progress_
     # 检查是否启用上下文检索
     if not chunks or not parser_config.get("context_retrieval", {}).get("use_context_retrieval", False):
         return chunks
-    
+
     # 获取上下文检索配置
     context_config = parser_config.get("context_retrieval", {})
     chunk_context_prompt = context_config.get("chunk_context_prompt", "")
     document_context_prompt = context_config.get("document_context_prompt", "")
-    
+
     if not chunk_context_prompt or not document_context_prompt:
         if progress_callback:
             progress_callback(msg="上下文检索配置不完整，跳过上下文添加")
         return chunks
-    
-    
+
     doc_id = doc.get("id") or chunks[0].get("doc_id", "")
-    
+
     if not doc_id:
         if progress_callback:
             progress_callback(msg="无法确定文档ID，跳过上下文添加")
         return chunks
-    
- 
+
     try:
         from rag.nlp.search import fetch_full_doc_from_storage
-        
+
         if progress_callback:
             progress_callback(msg=f"尝试获取完整文档内容 (doc_id: {doc_id})...")
-        
-   
-        bucket, name = await trio.to_thread.run_sync(
-            lambda: File2DocumentService.get_storage_address(doc_id=doc_id)
+
+        full_doc_content = await trio.to_thread.run_sync(
+            lambda: fetch_full_doc_from_storage(doc_id=doc_id)
         )
-        
-        
-        file_content_bytes = await trio.to_thread.run_sync(
-            lambda: STORAGE_IMPL.get(bucket, name)
-        )
-        
-        if not file_content_bytes:
+
+        if not full_doc_content:
             if progress_callback:
-                progress_callback(msg="无法获取完整文档内容，跳过上下文添加")
+                progress_callback(msg=f"无法获取文档内容，跳过上下文添加")
             return chunks
-        
-      
-        try:
-            from rag.nlp import find_codec
-            encoding = find_codec(file_content_bytes)
-            full_doc_content = file_content_bytes.decode(encoding, errors="ignore")
-        except Exception as e:
-            if progress_callback:
-                progress_callback(msg=f"无法解码文档内容: {str(e)}，跳过上下文添加")
-            return chunks
-        
-        if len(full_doc_content) > DOC_MAXIMUM_SIZE:
-            full_doc_content = full_doc_content[:DOC_MAXIMUM_SIZE] + "..."
-        
-       
+
         if progress_callback:
             progress_callback(msg=f"成功获取完整文档内容，开始为{len(chunks)}个文档块添加上下文信息...")
-        
+
         # 准备文档上下文prompt
         doc_prompt = document_context_prompt.format(doc_content=full_doc_content)
-        
+
         # 为每个块添加上下文
         enhanced_chunks = []
         for i, chunk in enumerate(chunks):
             try:
                 # 构建完整prompt
                 prompt = doc_prompt + chunk_context_prompt.format(chunk_content=chunk["content_with_weight"])
-                
+
                 # 调用LLM生成上下文
                 async with chat_limiter:
                     context = await trio.to_thread.run_sync(
                         lambda: chat_model.chat(prompt, [{"role": "user", "content": prompt}], {"temperature": 0.2})
                     )
-                
+
                 if isinstance(context, tuple):
                     context = context[0]
-                
+
                 # 去除可能的思考过程
                 context = re.sub(r"<think>.*</think>", "", context, flags=re.DOTALL)
-                
+
                 # 创建新块，添加上下文
                 new_chunk = chunk.copy()
                 new_chunk["context"] = context.strip()
@@ -571,24 +566,24 @@ async def contextual_retrieval(chunks, doc, parser_config, chat_model, progress_
                 # 更新分词
                 new_chunk["content_ltks"] = rag_tokenizer.tokenize(new_chunk["content_with_weight"])
                 new_chunk["content_sm_ltks"] = rag_tokenizer.fine_grained_tokenize(new_chunk["content_ltks"])
-                
+
                 enhanced_chunks.append(new_chunk)
-                
+
                 # 更新进度
                 if progress_callback and i % 5 == 0:
-                    progress_callback(prog=0.4 + 0.3 * (i / len(chunks)), 
-                                    msg=f"已为{i+1}/{len(chunks)}个文档块添加上下文信息")
-                    
+                    progress_callback(prog=0.4 + 0.3 * (i / len(chunks)),
+                                      msg=f"已为{i + 1}/{len(chunks)}个文档块添加上下文信息")
+
             except Exception as e:
                 logging.exception(f"为文档块添加上下文时出错使用原始分块内容: {str(e)}")
                 # 如果处理失败，使用原始块
                 enhanced_chunks.append(chunk)
-        
+
         if progress_callback:
             progress_callback(msg=f"已完成{len(chunks)}个文档块的上下文添加")
-        
+
         return enhanced_chunks
-        
+
     except Exception as e:
         logging.exception(f"获取完整文档时出错: {str(e)}")
         if progress_callback:
@@ -653,7 +648,8 @@ async def do_handle_task(task):
         start_ts = timer()
         with_resolution = graphrag_conf.get("resolution", False)
         with_community = graphrag_conf.get("community", False)
-        await run_graphrag(task, task_language, with_resolution, with_community, chat_model, embedding_model, progress_callback)
+        await run_graphrag(task, task_language, with_resolution, with_community, chat_model, embedding_model,
+                           progress_callback)
         progress_callback(prog=1.0, msg="Knowledge Graph done ({:.2f}s)".format(timer() - start_ts))
         return
     else:
@@ -666,7 +662,7 @@ async def do_handle_task(task):
         if not chunks:
             progress_callback(1., msg=f"No chunk built from {task_document_name}")
             return
-        
+
         # 添加上下文检索处理 (如果在配置中启用)
         if task_parser_config.get("context_retrieval", {}).get("use_context_retrieval", False):
             start_context_ts = timer()
@@ -679,7 +675,7 @@ async def do_handle_task(task):
                 progress_callback=progress_callback
             )
             logging.info("上下文处理: {:.2f}s".format(timer() - start_context_ts))
-        
+
         # TODO: exception handler
         ## set_progress(task["did"], -1, "ERROR: ")
         progress_callback(msg="Generate {} chunks".format(len(chunks)))
@@ -701,7 +697,9 @@ async def do_handle_task(task):
     doc_store_result = ""
     es_bulk_size = 4
     for b in range(0, len(chunks), es_bulk_size):
-        doc_store_result = await trio.to_thread.run_sync(lambda: settings.docStoreConn.insert(chunks[b:b + es_bulk_size], search.index_name(task_tenant_id), task_dataset_id))
+        doc_store_result = await trio.to_thread.run_sync(
+            lambda: settings.docStoreConn.insert(chunks[b:b + es_bulk_size], search.index_name(task_tenant_id),
+                                                 task_dataset_id))
         if b % 128 == 0:
             progress_callback(prog=0.8 + 0.1 * (b + 1) / len(chunks), msg="")
         if doc_store_result:
@@ -714,7 +712,9 @@ async def do_handle_task(task):
             TaskService.update_chunk_ids(task["id"], chunk_ids_str)
         except DoesNotExist:
             logging.warning(f"do_handle_task update_chunk_ids failed since task {task['id']} is unknown.")
-            doc_store_result = await trio.to_thread.run_sync(lambda: settings.docStoreConn.delete({"id": chunk_ids}, search.index_name(task_tenant_id), task_dataset_id))
+            doc_store_result = await trio.to_thread.run_sync(
+                lambda: settings.docStoreConn.delete({"id": chunk_ids}, search.index_name(task_tenant_id),
+                                                     task_dataset_id))
             return
     logging.info("Indexing doc({}), page({}-{}), chunks({}), elapsed: {:.2f}".format(task_document_name, task_from_page,
                                                                                      task_to_page, len(chunks),
@@ -816,6 +816,7 @@ async def main():
             async with task_limiter:
                 nursery.start_soon(handle_task)
     logging.error("BUG!!! You should not reach here!!!")
+
 
 if __name__ == "__main__":
     faulthandler.enable()

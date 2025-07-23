@@ -21,6 +21,7 @@ import os
 
 import numpy as np
 
+from api.db.services.file2document_service import File2DocumentService
 from rag.nlp import rag_tokenizer, query
 from rag.settings import DOC_MAXIMUM_SIZE
 from rag.settings import TAG_FLD, PAGERANK_FLD
@@ -522,65 +523,34 @@ class Dealer:
                          key=lambda x: x[1] * -1)[:topn_tags]
         return {a.replace(".", "_"): max(1, c) for a, c in tag_fea}
 
-def fetch_full_doc_from_storage(doc_id: str, kb_id: str) -> str | None:
+def fetch_full_doc_from_storage(doc_id: str) -> str | None:
     """
-    根据文档 ID 从 MinIO (通过 STORAGE_IMPL) 获取完整的文档内容。
-    假设 kb_id 是 bucket 名称，doc_object.location 是 object key。
+
+    根据doc_id从MinIO获取完整的文档内容,当前解码方式只适用于纯文本
 
     Args:
         doc_id (str): 文档的唯一标识符。
-        kb_id (str): 知识库ID (虽然在此实现中可能不直接用于路径，但保留参数一致性)。
 
     Returns:
         str | None: 返回文档的完整文本内容（如果找到且是文本），
                      如果找不到、发生错误或不是文本文件则返回 None。
                      内容会被限制在 DOC_MAXIMUM_SIZE。
     """
-    from api.db.services.document_service import DocumentService
+
+    bucket, name =File2DocumentService.get_storage_address(doc_id=doc_id)
+
     try:
-        # 1. 使用 DocumentService 获取文档元组 (success, doc_object)
-        success, doc_object = DocumentService.get_by_id(doc_id)
-        logging.info(f"Fetched doc_meta tuple for {doc_id}: success={success}, object_type={type(doc_object)}")
-
-        if not success or doc_object is None:
-            logging.warning(f"Could not find document object for doc_id: {doc_id} (success={success})")
+        file_content_bytes = STORAGE_IMPL.get(bucket, name)
+        if not file_content_bytes:
             return None
-
-        # 检查对象是否有 location 属性
-        if not hasattr(doc_object, 'location'):
-             logging.warning(f"Document object for doc_id: {doc_id} does not have 'location' attribute. Object type: {type(doc_object)}")
-             return None
-
-        # location 现在被视为 object_key (文件名)
-        object_key = doc_object.location
-        if not object_key:
-            logging.warning(f"Document object found for doc_id: {doc_id}, but location (object key) is missing or empty.")
+        try:
+            from rag.nlp import find_codec
+            encoding = find_codec(file_content_bytes)
+            full_doc_content = file_content_bytes.decode(encoding, errors="ignore")
+        except Exception as e:
+            logging.error(f"Error decoding document content for doc_id {doc_id}: {e}")
             return None
-
-        # 2. 使用 kb_id 作为 bucket_name, object_key 作为 filename 调用 STORAGE_IMPL.get
-        bucket_name = kb_id # <--- 使用 kb_id 作为 bucket 名称
-        logging.debug(f"Attempting to fetch from storage: bucket='{bucket_name}', key='{object_key}' for doc_id: {doc_id}")
-        file_content_bytes = STORAGE_IMPL.get(bucket_name, object_key) # <--- 传递 bucket_name 和 object_key
-
-        if file_content_bytes:
-            # 3. 尝试解码
-            try:
-                content = file_content_bytes.decode('utf-8')
-                # 4. 限制大小
-                truncated = False
-                if len(content) > DOC_MAXIMUM_SIZE:
-                    logging.debug(f"Document content for {doc_id} truncated from {len(content)} bytes.")
-                    content = content[:DOC_MAXIMUM_SIZE] + "..."
-                    truncated = True
-                logging.info(f"Successfully fetched and decoded content for doc_id: {doc_id} from bucket: {bucket_name}, key: {object_key}. Length: {len(content)} (truncated: {truncated})")
-                return content
-            except UnicodeDecodeError:
-                logging.warning(f"Could not decode file content as UTF-8 for doc_id: {doc_id} (bucket: {bucket_name}, key: {object_key}). It might be a binary file.")
-                return f"[Binary content in bucket {bucket_name} at key {object_key}]"
-        else:
-            logging.warning(f"STORAGE_IMPL.get() returned empty content for doc_id: {doc_id} (bucket: {bucket_name}, key: {object_key})")
-            return None
-
+        return full_doc_content[:DOC_MAXIMUM_SIZE]
     except Exception as e:
-        logging.error(f"Error fetching full document content for doc_id {doc_id}: {type(e).__name__} - {e}", exc_info=True)
+        logging.error(f"Error fetching document content for doc_id {doc_id}: {e}")
         return None
