@@ -98,18 +98,15 @@ def get_all_pages(parent_id):
 
 def get_doc_content(doc_id):
     """获取ClickUp文档内容"""
-    url = f"https://api.clickup.com/api/v3/workspaces/{WORKSPACE_ID}/docs/{doc_id}/pages"
-    params = {
-        "max_page_depth": -1,
-        "content_format": "text%2Fmd"
-    }
+    url = f"https://api.clickup.com/api/v3/workspaces/{WORKSPACE_ID}/docs/{doc_id}/pages?max_page_depth=-1&content_format=text%2Fmd"
+
     headers = {
         "accept": "application/json",
         "Authorization": CLICKUP_TOKEN
     }
     
     try:
-        response = requests.get(url, headers=headers, params=params)
+        response = requests.get(url, headers=headers)
         response.raise_for_status()
         logger.debug(f"成功获取文档内容，doc_id: {doc_id}")
         return response.json()
