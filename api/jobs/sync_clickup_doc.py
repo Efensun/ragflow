@@ -445,7 +445,7 @@ def upload_doc_to_ragflow(doc_content, doc_name, parent_folder_id, kb_id):
         # 确定文件类型
         filetype = filename_type(filename)
         if not filetype:
-            filetype = FileType.OTHER.value
+            filetype = FileType.DOC.value
 
         # 生成唯一的存储位置名称
         location = filename
@@ -474,7 +474,7 @@ def upload_doc_to_ragflow(doc_content, doc_name, parent_folder_id, kb_id):
         # 存储文件内容到存储系统
         STORAGE_IMPL.put(parent_folder_id, location, blob)
 
-        logger.info(f"成功上传新文档到文件服务: {filename}")
+        logger.warning(f"成功上传新文档到文件服务: {filename}")
 
         # 绑定文件到知识库
         success, message = bind_file_to_kb(file_record.id, kb_id)
