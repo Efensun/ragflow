@@ -600,86 +600,93 @@ def start_index():
             return False
 
         folder_configs = [
-            (RAGFLOW_WEB_PARENT_FOLDER_ID, "Web文档"),
-            (RAGFLOW_PRODUCT_PARENT_FOLDER_ID, "产品文档")
+            (RAGFLOW_WEB_PARENT_FOLDER_ID, RAGFLOW_WEB_KB_ID, "Web文档"),
+            (RAGFLOW_PRODUCT_PARENT_FOLDER_ID, RAGFLOW_PRODUCT_KB_ID, "产品文档")
         ]
 
         total_processed = 0
         total_started = 0
 
-        for folder_id, folder_name in folder_configs:
-            logger.info(f"检查文件夹 {folder_name} (ID: {folder_id}) 中的文档")
+        for folder_id, kb_id, folder_name in folder_configs:
+            logger.info(f"检查文件夹 {folder_name} (ID: {folder_id}) 中的ClickUp文档")
 
-            # 获取文件夹中所有来自ClickUp的文件（不限制文件类型）
-            files = FileService.query(parent_id=folder_id, source_type="clickup")
-            logger.info(f"文件夹 {folder_name} 中有 {len(files)} 个ClickUp文件")
+            # 通过文档的source_type查找ClickUp文档
+            clickup_docs = DocumentService.query(
+                kb_id=kb_id, 
+                source_type="clickup"
+            )
+            
+            logger.info(f"文件夹 {folder_name} 中有 {len(clickup_docs)} 个ClickUp文档")
 
-            for file in files:
+            for doc in clickup_docs:
                 total_processed += 1
                 try:
-                    # 检查文件是否已经绑定到文档
-                    file_to_docs = File2DocumentService.get_by_file_id(file.id)
-
-                    if not file_to_docs:
-                        logger.debug(f"文件 {file.name} 未绑定到任何文档，跳过")
+                    # 检查文档状态
+                    if doc.run == TaskStatus.RUNNING.value:
+                        logger.debug(f"文档 {doc.name} 已在处理中，跳过")
                         continue
 
-                    # 获取关联的文档
-                    for f2d in file_to_docs:
-                        doc_id = f2d.document_id
-                        e, doc = DocumentService.get_by_id(doc_id)
+                    if doc.progress >= 1.0:
+                        logger.debug(f"文档 {doc.name} 已完成处理 (进度: {doc.progress})")
+                        continue
 
-                        if not e:
-                            logger.warning(f"找不到文档 {doc_id}，跳过")
-                            continue
+                    logger.info(f"启动文档处理: {doc.name}")
 
-                        # 检查文档状态
-                        if doc.run == TaskStatus.RUNNING.value:
-                            logger.debug(f"文档 {doc.name} 已在处理中，跳过")
-                            continue
+                    # 清除旧的处理记录
+                    try:
+                        from rag.nlp import search
+                        from api import settings
 
-                        if doc.progress >= 1.0:
-                            logger.debug(f"文档 {doc.name} 已完成处理 (进度: {doc.progress})")
-                            continue
+                        tenant_id = DocumentService.get_tenant_id(doc.id)
+                        if tenant_id:
+                            # 删除现有任务
+                            TaskService.filter_delete([Task.doc_id == doc.id])
 
-                        logger.info(f"启动文档处理: {doc.name}")
+                            # 清除索引数据
+                            if settings.docStoreConn.indexExist(search.index_name(tenant_id), doc.kb_id):
+                                settings.docStoreConn.delete({"doc_id": doc.id}, search.index_name(tenant_id), doc.kb_id)
 
-                        # 设置文档为运行状态
-                        update_info = {
-                            "run": TaskStatus.RUNNING.value,
-                            "progress": 0,
-                            "progress_msg": "开始处理"
-                        }
+                    except Exception as clean_e:
+                        logger.warning(f"清除旧数据失败: {clean_e}")
 
-                        success = DocumentService.update_by_id(doc_id, update_info)
-                        if not success:
-                            logger.error(f"更新文档状态失败: {doc.name}")
-                            continue
+                    # 设置文档为运行状态
+                    update_info = {
+                        "run": TaskStatus.RUNNING.value,
+                        "progress": 0,
+                        "progress_msg": "开始处理",
+                        "chunk_num": 0,
+                        "token_num": 0
+                    }
 
-                        # 获取租户ID
-                        tenant_id = DocumentService.get_tenant_id(doc_id)
-                        if not tenant_id:
-                            logger.error(f"获取租户ID失败: {doc.name}")
-                            continue
+                    success = DocumentService.update_by_id(doc.id, update_info)
+                    if not success:
+                        logger.error(f"更新文档状态失败: {doc.name}")
+                        continue
 
-                        # 准备文档信息用于队列处理
-                        doc_dict = doc.to_dict()
-                        doc_dict["tenant_id"] = tenant_id
+                    # 获取租户ID
+                    tenant_id = DocumentService.get_tenant_id(doc.id)
+                    if not tenant_id:
+                        logger.error(f"获取租户ID失败: {doc.name}")
+                        continue
 
-                        # 获取文件存储地址
-                        bucket, name = File2DocumentService.get_storage_address(doc_id=doc_id)
+                    # 准备文档信息用于队列处理
+                    doc_dict = doc.to_dict()
+                    doc_dict["tenant_id"] = tenant_id
 
-                        # 将文档加入处理队列
-                        queue_tasks(doc_dict, bucket, name, 0)
+                    # 获取文件存储地址
+                    bucket, name = File2DocumentService.get_storage_address(doc_id=doc.id)
 
-                        total_started += 1
-                        logger.info(f"文档 {doc.name} 已加入处理队列")
+                    # 将文档加入处理队列
+                    queue_tasks(doc_dict, bucket, name, 0)
+
+                    total_started += 1
+                    logger.info(f"文档 {doc.name} 已加入处理队列")
 
                 except Exception as e:
-                    logger.error(f"处理文件 {file.name} 时出错: {e}")
+                    logger.error(f"处理文档 {doc.name} 时出错: {e}")
                     continue
 
-        logger.info(f"索引启动完成！检查文件总数: {total_processed}, 启动处理文档数: {total_started}")
+        logger.info(f"索引启动完成！检查文档总数: {total_processed}, 启动处理文档数: {total_started}")
 
         return True
 
@@ -697,44 +704,44 @@ def check_processing_status():
             return
 
         folder_configs = [
-            (RAGFLOW_WEB_PARENT_FOLDER_ID, "Web文档"),
-            (RAGFLOW_PRODUCT_PARENT_FOLDER_ID, "产品文档")
+            (RAGFLOW_WEB_KB_ID, "Web文档"),
+            (RAGFLOW_PRODUCT_KB_ID, "产品文档")
         ]
 
-        total_files = 0
+        total_docs = 0
         total_processing = 0
         total_completed = 0
         total_failed = 0
 
-        for folder_id, folder_name in folder_configs:
-            # 获取ClickUp文件（不限制文件类型）
-            files = FileService.query(parent_id=folder_id, source_type="clickup")
-            total_files += len(files)
+        for kb_id, folder_name in folder_configs:
+            # 通过知识库ID和source_type查找ClickUp文档
+            clickup_docs = DocumentService.query(
+                kb_id=kb_id, 
+                source_type="clickup"
+            )
+            
+            total_docs += len(clickup_docs)
             processing_count = 0
             completed_count = 0
             failed_count = 0
 
-            for file in files:
-                file_to_docs = File2DocumentService.get_by_file_id(file.id)
-                for f2d in file_to_docs:
-                    e, doc = DocumentService.get_by_id(f2d.document_id)
-                    if e:
-                        if doc.run == TaskStatus.RUNNING.value:
-                            processing_count += 1
-                        elif doc.progress >= 1.0:
-                            completed_count += 1
-                        elif doc.run == TaskStatus.FAIL.value:
-                            failed_count += 1
+            for doc in clickup_docs:
+                if doc.run == TaskStatus.RUNNING.value:
+                    processing_count += 1
+                elif doc.progress >= 1.0:
+                    completed_count += 1
+                elif doc.run == TaskStatus.FAIL.value:
+                    failed_count += 1
 
             total_processing += processing_count
             total_completed += completed_count
             total_failed += failed_count
 
             logger.info(
-                f"{folder_name}: {len(files)} 文件, {processing_count} 处理中, {completed_count} 已完成, {failed_count} 失败")
+                f"{folder_name}: {len(clickup_docs)} 文档, {processing_count} 处理中, {completed_count} 已完成, {failed_count} 失败")
 
         logger.info(
-            f"总计: {total_files} 文件, {total_processing} 处理中, {total_completed} 已完成, {total_failed} 失败")
+            f"总计: {total_docs} 文档, {total_processing} 处理中, {total_completed} 已完成, {total_failed} 失败")
 
     except Exception as e:
         logger.error(f"检查状态失败: {e}")
@@ -749,13 +756,17 @@ def check_sync_status():
             return
 
         folder_configs = [
-            (RAGFLOW_WEB_PARENT_FOLDER_ID, "Web文档"),
-            (RAGFLOW_PRODUCT_PARENT_FOLDER_ID, "产品文档")
+            (RAGFLOW_WEB_KB_ID, "Web文档"),
+            (RAGFLOW_PRODUCT_KB_ID, "产品文档")
         ]
 
-        for folder_id, folder_name in folder_configs:
-            files = FileService.query(parent_id=folder_id, source_type="clickup")
-            logger.info(f"{folder_name}文件夹: {len(files)} 个ClickUp同步的文档")
+        for kb_id, folder_name in folder_configs:
+            # 通过知识库ID和source_type查找ClickUp文档
+            clickup_docs = DocumentService.query(
+                kb_id=kb_id, 
+                source_type="clickup"
+            )
+            logger.info(f"{folder_name}知识库: {len(clickup_docs)} 个ClickUp同步的文档")
 
         # 同时检查处理状态
         check_processing_status()
