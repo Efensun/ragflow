@@ -32,8 +32,8 @@ logger.info("=" * 50)
 logger.info("ClickUp文档同步脚本启动")
 logger.info("=" * 50)
 
-COINEX_WEB_FOLDER_ID = ''
-COINEX_PRODUCT_FOLDER_ID = ''
+COINEX_WEB_FOLDER_ID = os.getenv('COINEX_WEB_FOLDER_ID')
+COINEX_PRODUCT_FOLDER_ID = os.getenv('COINEX_PRODUCT_FOLDER_ID')
 
 # 配置信息
 CLICKUP_TOKEN = os.getenv('CLICKUP_TOKEN')
