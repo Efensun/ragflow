@@ -239,7 +239,8 @@ def bind_file_to_kb(file_id, kb_id):
             "type": file.type,
             "name": file.name,
             "location": file.location,
-            "size": file.size
+            "size": file.size,
+            "source_type": "clickup"
         })
 
         # 创建文件到文档的绑定
@@ -465,7 +466,7 @@ def upload_doc_to_ragflow(doc_content, doc_name, parent_folder_id, kb_id):
             "name": filename,  # 直接使用原始文件名
             "location": location,
             "size": len(blob),
-            "source_type": "clickup"  # 标记来源为 ClickUp
+            "source_type": ""
         }
 
         # 插入文件记录到数据库
