@@ -15,17 +15,32 @@
 #
 
 import io
+import os
 
 import numpy as np
 from PIL import Image
 
 from api.db import LLMType
 from api.db.services.llm_service import LLMBundle
-from deepdoc.vision import OCR
 from rag.nlp import tokenize
 from rag.utils import clean_markdown_block
 
-ocr = OCR()
+ocr = None
+
+
+def get_ocr():
+    """延迟初始化 OCR 实例，支持环境变量禁用"""
+    global ocr
+
+    # 检查是否通过环境变量禁用 OCR
+    if os.environ.get('DISABLE_OCR', '').lower() in ('true', '1', 'yes'):
+        raise RuntimeError("OCR has been disabled via DISABLE_OCR environment variable")
+
+    if ocr is None:
+        from deepdoc.vision import OCR
+        ocr = OCR()
+
+    return ocr
 
 
 def chunk(filename, binary, tenant_id, lang, callback=None, **kwargs):
@@ -34,14 +49,24 @@ def chunk(filename, binary, tenant_id, lang, callback=None, **kwargs):
         "docnm_kwd": filename,
         "image": img
     }
-    bxs = ocr(np.array(img))
-    txt = "\n".join([t[0] for _, t in bxs if t[0]])
+
+    try:
+        ocr = get_ocr()
+        bxs = ocr(np.array(img))
+        txt = "\n".join([t[0] for _, t in bxs if t[0]])
+    except RuntimeError as e:
+        # OCR 被禁用，回退到纯 Vision LLM
+        callback(0.1, f"OCR disabled: {e}")
+        txt = ""
+
     eng = lang.lower() == "english"
-    callback(0.4, "Finish OCR: (%s ...)" % txt[:12])
-    if (eng and len(txt.split()) > 32) or len(txt) > 32:
-        tokenize(doc, txt, eng)
-        callback(0.8, "OCR results is too long to use CV LLM.")
-        return [doc]
+
+    if txt:
+        callback(0.4, "Finish OCR: (%s ...)" % txt[:12])
+        if (eng and len(txt.split()) > 32) or len(txt) > 32:
+            tokenize(doc, txt, eng)
+            callback(0.8, "OCR results is too long to use CV LLM.")
+            return [doc]
 
     try:
         callback(0.4, "Use CV LLM to describe the picture.")
