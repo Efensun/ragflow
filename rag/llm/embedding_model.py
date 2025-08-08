@@ -327,7 +327,7 @@ class XinferenceEmbed(Base):
         self.model_name = model_name
 
     def encode(self, texts: list):
-        batch_size = 16
+        batch_size = 2
         ress = []
         total_tokens = 0
         for i in range(0, len(texts), batch_size):
