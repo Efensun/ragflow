@@ -268,7 +268,7 @@ def full_question(tenant_id, llm_id, messages, language=None):
     yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
     tomorrow = (datetime.date.today() + datetime.timedelta(days=1)).isoformat()
     prompt = f"""
-Role: A helpful assistant
+Role: Expert in Rewriting Questions
 
 Task and steps:
     1. Generate a full user question that would follow the conversation.
