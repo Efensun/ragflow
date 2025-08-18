@@ -324,7 +324,7 @@ Output: What's the weather in Rochester on {tomorrow}?
 {conv}
 ###############
     """
-    ans = chat_mdl.chat(prompt, [{"role": "user", "content": "Output: "}], {"temperature": 0.2})
+    ans = chat_mdl.chat(prompt, [{"role": "user", "content": "Output: "}], {"temperature": 1.0})
     ans = re.sub(r"<think>.*</think>", "", ans, flags=re.DOTALL)
     return ans if ans.find("**ERROR**") < 0 else messages[-1]["content"]
 
