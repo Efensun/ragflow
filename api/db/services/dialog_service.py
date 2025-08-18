@@ -215,7 +215,9 @@ def chat(dialog, messages, conv_id, stream=True, **kwargs):
             prompt_config["system"] = prompt_config["system"].replace("{%s}" % p["key"], " ")
 
     if len(questions) > 1 and prompt_config.get("refine_multiturn"):
+        logging.info(f'before refine_multiturn: {questions}')
         questions = [full_question(dialog.tenant_id, dialog.llm_id, messages)]
+        logging.info(f'after refine_multiturn: {questions}')
     else:
         questions = questions[-1:]
 
