@@ -37,6 +37,32 @@ from timeit import default_timer as timer
 
 from rag.utils.redis_conn import REDIS_CONN
 
+@manager.route("/health", methods=["GET"])  # noqa: F821
+def health():
+    """
+    Simple health check endpoint.
+    ---
+    tags:
+      - System
+    responses:
+      200:
+        description: System is healthy.
+        schema:
+          type: object
+          properties:
+            status:
+              type: string
+              description: Health status.
+            timestamp:
+              type: string
+              description: Current timestamp.
+    """
+    return get_json_result(data={
+        "status": "healthy",
+        "timestamp": datetime_format(datetime.now())
+    })
+
+
 @manager.route("/version", methods=["GET"])  # noqa: F821
 @login_required
 def version():
