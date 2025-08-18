@@ -111,8 +111,8 @@ class Base(ABC):
         # Implement exponential backoff retry strategy
         for attempt in range(self.max_retries):
             try:
+                logging.info(f"model request prompts: {history}")
                 response = self.client.chat.completions.create(model=self.model_name, messages=history, tools=tools, **gen_conf)
-
                 assistant_output = response.choices[0].message
                 if not ans and "tool_calls" not in assistant_output and "reasoning_content" in assistant_output:
                     ans += "<think>" + ans + "</think>"
@@ -185,6 +185,7 @@ class Base(ABC):
         # Implement exponential backoff retry strategy
         for attempt in range(self.max_retries):
             try:
+
                 response = self.client.chat.completions.create(model=self.model_name, messages=history, **gen_conf)
 
                 if any([not response.choices, not response.choices[0].message, not response.choices[0].message.content]):
