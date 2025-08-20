@@ -74,7 +74,7 @@ def get_last_sync_time():
     except Exception as e:
         logger.error(f"读取同步时间失败: {e}")
 
-    default_date = datetime(2025, 5, 17)
+    default_date = datetime(2024, 7, 20)
     default_time = int(default_date.timestamp() * 1000)
     logger.warning("使用默认同步时间（2025-05-17）")
     return default_time
