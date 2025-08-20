@@ -20,13 +20,11 @@ import logging
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-
 if not logger.handlers:
     console_handler = logging.StreamHandler()
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s')
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
-
 
 logger.info("=" * 50)
 logger.info("ClickUp文档同步脚本启动")
@@ -68,9 +66,9 @@ def get_last_sync_time():
     except Exception as e:
         logger.error(f"读取同步时间失败: {e}")
 
-    # 默认返回7天前的时间戳（毫秒）
-    default_time = int((datetime.now() - timedelta(days=7)).timestamp() * 1000)
-    logger.warning("使用默认同步时间（7天前）")
+    default_date = datetime(2025, 5, 17)
+    default_time = int(default_date.timestamp() * 1000)
+    logger.warning("使用默认同步时间（2025-05-17）")
     return default_time
 
 
@@ -146,6 +144,7 @@ def process_doc_content(doc_data, parent_name="", last_sync_time=None):
     """递归处理文档内容，提取需要同步的页面"""
     documents = []
     origin_url_prefix = "https://app.clickup.com"
+
     def extract_content(doc, prefix=""):
         doc_name = doc.get('name', '')
         doc_content = doc.get('content', '')
@@ -617,10 +616,10 @@ def start_index():
 
             # 通过文档的source_type查找ClickUp文档
             clickup_docs = DocumentService.query(
-                kb_id=kb_id, 
+                kb_id=kb_id,
                 source_type="clickup"
             )
-            
+
             logger.info(f"文件夹 {folder_name} 中有 {len(clickup_docs)} 个ClickUp文档")
 
             for doc in clickup_docs:
@@ -649,7 +648,8 @@ def start_index():
 
                             # 清除索引数据
                             if settings.docStoreConn.indexExist(search.index_name(tenant_id), doc.kb_id):
-                                settings.docStoreConn.delete({"doc_id": doc.id}, search.index_name(tenant_id), doc.kb_id)
+                                settings.docStoreConn.delete({"doc_id": doc.id}, search.index_name(tenant_id),
+                                                             doc.kb_id)
 
                     except Exception as clean_e:
                         logger.warning(f"清除旧数据失败: {clean_e}")
@@ -721,10 +721,10 @@ def check_processing_status():
         for kb_id, folder_name in folder_configs:
             # 通过知识库ID和source_type查找ClickUp文档
             clickup_docs = DocumentService.query(
-                kb_id=kb_id, 
+                kb_id=kb_id,
                 source_type="clickup"
             )
-            
+
             total_docs += len(clickup_docs)
             processing_count = 0
             completed_count = 0
@@ -768,7 +768,7 @@ def check_sync_status():
         for kb_id, folder_name in folder_configs:
             # 通过知识库ID和source_type查找ClickUp文档
             clickup_docs = DocumentService.query(
-                kb_id=kb_id, 
+                kb_id=kb_id,
                 source_type="clickup"
             )
             logger.info(f"{folder_name}知识库: {len(clickup_docs)} 个ClickUp同步的文档")
@@ -778,6 +778,140 @@ def check_sync_status():
 
     except Exception as e:
         logger.error(f"检查状态失败: {e}")
+
+
+def clean_clickup_docs():
+    """清理所有已同步的ClickUp文档"""
+    try:
+        logger.info("开始清理ClickUp文档...")
+
+        # 检查文件夹ID是否设置
+        if not all([RAGFLOW_WEB_KB_ID, RAGFLOW_PRODUCT_KB_ID]):
+            logger.error("知识库ID未设置，无法清理文档")
+            return False
+
+        folder_configs = [
+            (RAGFLOW_WEB_KB_ID, "Web文档"),
+            (RAGFLOW_PRODUCT_KB_ID, "产品文档")
+        ]
+
+        total_deleted = 0
+
+        for kb_id, folder_name in folder_configs:
+            logger.info(f"清理{folder_name}知识库中的ClickUp文档...")
+
+            # 查找所有ClickUp来源的文档
+            clickup_docs = DocumentService.query(
+                kb_id=kb_id,
+                source_type="clickup"
+            )
+
+            logger.info(f"找到 {len(clickup_docs)} 个ClickUp文档需要清理")
+
+            for doc in clickup_docs:
+                try:
+                    logger.debug(f"删除文档: {doc.name}")
+
+                    # 获取租户ID
+                    tenant_id = DocumentService.get_tenant_id(doc.id)
+
+                    if tenant_id:
+                        # 清除索引数据
+                        try:
+                            from rag.nlp import search
+                            from api import settings
+
+                            if settings.docStoreConn.indexExist(search.index_name(tenant_id), doc.kb_id):
+                                settings.docStoreConn.delete({"doc_id": doc.id}, search.index_name(tenant_id),
+                                                             doc.kb_id)
+                                logger.debug(f"清除文档索引: {doc.name}")
+                        except Exception as index_e:
+                            logger.warning(f"清除索引失败: {index_e}")
+
+                        # 删除相关任务
+                        try:
+                            TaskService.filter_delete([Task.doc_id == doc.id])
+                            logger.debug(f"删除相关任务: {doc.name}")
+                        except Exception as task_e:
+                            logger.warning(f"删除任务失败: {task_e}")
+
+                        # 删除文档记录
+                        success = DocumentService.remove_document(doc, tenant_id)
+                        if success:
+                            total_deleted += 1
+                            logger.debug(f"成功删除文档: {doc.name}")
+                        else:
+                            logger.error(f"删除文档失败: {doc.name}")
+
+                    # 删除文件到文档的绑定关系
+                    try:
+                        file_bindings = File2DocumentService.get_by_document_id(doc.id)
+                        for binding in file_bindings:
+                            File2DocumentService.delete_by_id(binding.id)
+
+                            # 删除对应的文件记录
+                            try:
+                                e, file = FileService.get_by_id(binding.file_id)
+                                if e:
+                                    # 删除存储中的文件
+                                    try:
+                                        STORAGE_IMPL.rm(file.parent_id, file.location)
+                                    except Exception as storage_e:
+                                        logger.warning(f"删除存储文件失败: {storage_e}")
+
+                                    # 删除文件记录
+                                    FileService.delete_by_id(binding.file_id)
+                                    logger.debug(f"删除文件: {file.name}")
+                            except Exception as file_e:
+                                logger.warning(f"删除文件记录失败: {file_e}")
+
+                    except Exception as binding_e:
+                        logger.warning(f"删除文件绑定失败: {binding_e}")
+
+                except Exception as e:
+                    logger.error(f"删除文档 {doc.name} 时出错: {e}")
+                    continue
+
+            logger.info(f"{folder_name}知识库清理完成")
+
+        # 清除同步时间记录，强制重新同步所有文档
+        try:
+            if os.path.exists(LAST_SYNC_TIME_FILE):
+                os.remove(LAST_SYNC_TIME_FILE)
+                logger.info("已清除同步时间记录")
+        except Exception as e:
+            logger.warning(f"清除同步时间记录失败: {e}")
+
+        logger.info(f"清理完成！共删除 {total_deleted} 个ClickUp文档")
+        return True
+
+    except Exception as e:
+        logger.error(f"清理ClickUp文档失败: {e}")
+        return False
+
+
+def clean_and_resync():
+    """清理所有ClickUp文档并重新同步"""
+    logger.info("开始清理并重新同步ClickUp文档...")
+
+    # 第一步：清理现有文档
+    if not clean_clickup_docs():
+        logger.error("清理文档失败，停止操作")
+        return False
+
+    logger.info("等待5秒后开始重新同步...")
+    time.sleep(5)
+
+    # 第二步：重新同步所有文档
+    success_count, error_count = get_clickup_docs()
+
+    # 第三步：启动索引
+    logger.info("等待5秒后启动索引...")
+    time.sleep(5)
+    start_index()
+
+    logger.info(f"清理并重新同步完成！成功: {success_count}, 失败: {error_count}")
+    return True
 
 
 def run():
@@ -820,6 +954,26 @@ def run():
     except KeyboardInterrupt:
         logger.info("停止同步任务")
 
-
 if __name__ == "__main__":
-    run()
+    import sys
+
+    if len(sys.argv) > 1:
+        if sys.argv[1] == "clean":
+            # 只清理文档
+            clean_clickup_docs()
+        elif sys.argv[1] == "clean-resync":
+            # 清理并重新同步
+            clean_and_resync()
+        elif sys.argv[1] == "sync":
+            # 只同步新文档
+            get_clickup_docs()
+            start_index()
+        else:
+            print("用法:")
+            print("  python sync_clickup_doc.py clean          # 只清理文档")
+            print("  python sync_clickup_doc.py clean-resync   # 清理并重新同步")
+            print("  python sync_clickup_doc.py sync           # 只同步新文档")
+            print("  python sync_clickup_doc.py                # 启动定时任务")
+    else:
+        # 默认启动定时任务
+        run()
