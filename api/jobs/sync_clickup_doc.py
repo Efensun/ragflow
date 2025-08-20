@@ -145,7 +145,7 @@ def should_sync_doc(doc_created_time, last_sync_time):
 def process_doc_content(doc_data, parent_name="", last_sync_time=None):
     """递归处理文档内容，提取需要同步的页面"""
     documents = []
-
+    origin_url_prefix = "https://app.clickup.com"
     def extract_content(doc, prefix=""):
         doc_name = doc.get('name', '')
         doc_content = doc.get('content', '')
@@ -168,6 +168,11 @@ def process_doc_content(doc_data, parent_name="", last_sync_time=None):
         if doc_name and doc_content and should_sync:
             # 创建完整的文档名称
             full_name = f"{prefix}{doc_name}" if prefix else doc_name
+            doc_id = doc.get('doc_id')
+            id = doc.get('id')
+            workspace_id = doc.get('workspace_id')
+            origin_url = f"{origin_url_prefix}/{workspace_id}/v/dc/{doc_id}/{id}"
+            doc_content = f"{doc_content}\n\n[Origin URL]({origin_url})"
             if parent_name:
                 full_name = f"{parent_name}_{full_name}"
 
