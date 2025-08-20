@@ -16,6 +16,7 @@ from api.utils import get_uuid
 from api.utils.file_utils import filename_type
 from rag.utils.storage_factory import STORAGE_IMPL
 import logging
+from api import settings
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -29,6 +30,13 @@ if not logger.handlers:
 logger.info("=" * 50)
 logger.info("ClickUp文档同步脚本启动")
 logger.info("=" * 50)
+
+
+try:
+    settings.init_settings()
+    logger.info("RAGFlow 设置初始化成功")
+except Exception as e:
+    logger.error(f"RAGFlow 设置初始化失败: {e}")
 
 COINEX_WEB_FOLDER_ID = os.getenv('COINEX_WEB_FOLDER_ID')
 COINEX_PRODUCT_FOLDER_ID = os.getenv('COINEX_PRODUCT_FOLDER_ID')
