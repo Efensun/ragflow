@@ -76,7 +76,7 @@ def get_last_sync_time():
 
     default_date = datetime(2024, 7, 20)
     default_time = int(default_date.timestamp() * 1000)
-    logger.warning("使用默认同步时间（2025-05-17）")
+    logger.warning("使用默认同步时间（2024-07-20）")
     return default_time
 
 
