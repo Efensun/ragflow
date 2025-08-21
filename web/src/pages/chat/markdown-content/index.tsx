@@ -262,33 +262,45 @@ const MarkdownContent = ({
       rehypePlugins={[rehypeWrapReference, rehypeKatex, rehypeRaw]}
       remarkPlugins={[remarkGfm, remarkMath]}
       className={styles.markdownContentWrapper}
-      components={
-        {
-          'custom-typography': ({ children }: { children: string }) =>
-            renderReference(children),
-          code(props: any) {
-            const { children, className, node, ...rest } = props;
-            const match = /language-(\w+)/.exec(className || '');
-            return match ? (
-              <SyntaxHighlighter
-                {...rest}
-                PreTag="div"
-                language={match[1]}
-                wrapLongLines
-              >
-                {String(children).replace(/\n$/, '')}
-              </SyntaxHighlighter>
-            ) : (
-              <code {...rest} className={classNames(className, 'text-wrap')}>
-                {children}
-              </code>
-            );
-          },
-          img(props: any) {
-            return <ResponsiveImage {...props} />;
-          },
-        } as any
-      }
+      components={{
+        'custom-typography': ({ children }: { children: string }) =>
+          renderReference(children),
+        code(props: any) {
+          const { children, className, node, ...rest } = props;
+          const match = /language-(\w+)/.exec(className || '');
+          return match ? (
+            <SyntaxHighlighter
+              {...rest}
+              PreTag="div"
+              language={match[1]}
+              wrapLongLines
+            >
+              {String(children).replace(/\n$/, '')}
+            </SyntaxHighlighter>
+          ) : (
+            <code {...rest} className={classNames(className, 'text-wrap')}>
+              {children}
+            </code>
+          );
+        },
+        img(props: any) {
+          return <ResponsiveImage {...props} />;
+        },
+        // 添加 a 标签的自定义渲染
+        a(props: any) {
+          const { href, children, ...rest } = props;
+          return (
+            <a
+              href={href}
+              target="_blank"  // 在新窗口打开
+              rel="noopener noreferrer"  // 安全性考虑
+              {...rest}
+            >
+              {children}
+            </a>
+          );
+        },
+      } as any}
     >
       {contentWithCursor}
     </Markdown>
