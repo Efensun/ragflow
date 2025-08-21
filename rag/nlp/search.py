@@ -542,7 +542,7 @@ def fetch_full_doc_from_storage(doc_id: str) -> str | None:
     def get_document_title(doc_id: str) -> str:
         """获取文档标题"""
         try:
-            from api.db import Document
+            from api.db.db_models import Document
             from api.db.db_models import DB
             with DB.connection_context():
                 doc = Document.select(Document.name).where(Document.id == doc_id).first()
