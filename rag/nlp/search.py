@@ -525,20 +525,63 @@ class Dealer:
 
 def fetch_full_doc_from_storage(doc_id: str) -> str | None:
     from api.db.services.file2document_service import File2DocumentService
+    from api.db.services.document_service import DocumentService
     """
-
+    
     根据doc_id从MinIO获取完整的文档内容,当前解码方式只适用于纯文本
-
+    
     Args:
         doc_id (str): 文档的唯一标识符。
-
+    
     Returns:
         str | None: 返回文档的完整文本内容（如果找到且是文本），
                      如果找不到、发生错误或不是文本文件则返回 None。
                      内容会被限制在 DOC_MAXIMUM_SIZE。
     """
+    
+    def get_document_title(doc_id: str) -> str:
+        """获取文档标题"""
+        try:
+            from api.db import Document
+            from api.db.db_models import DB
+            with DB.connection_context():
+                doc = Document.select(Document.name).where(Document.id == doc_id).first()
+                if doc and doc.name:
+                    return doc.name
+        except Exception as e:
+            logging.error(f"Error getting document title for doc_id {doc_id}: {e}")
+        return "文档"
+    
+    def format_document_content(content: str, doc_title: str) -> str:
+        """格式化文档内容，处理末尾的URL引用"""
+        if not content:
+            return content
+            
+        lines = content.strip().split('\n')
+        if not lines:
+            return content
+            
+        last_line = lines[-1].strip()
+        
+        # 处理情况1: > 原文: <URL>
+        yuque_pattern = r'>\s*原文:\s*<([^>]+)>'
+        yuque_match = re.search(yuque_pattern, last_line)
+        if yuque_match:
+            url = yuque_match.group(1)
+            lines[-1] = f"[{doc_title}]({url})"
+            return '\n'.join(lines)
+        
+        # 处理情况2: [Origin URL](URL)
+        origin_pattern = r'\[Origin URL\]\(([^)]+)\)'
+        origin_match = re.search(origin_pattern, last_line)
+        if origin_match:
+            url = origin_match.group(1)
+            lines[-1] = f"[{doc_title}]({url})"
+            return '\n'.join(lines)
+            
+        return content
 
-    bucket, name =File2DocumentService.get_storage_address(doc_id=doc_id)
+    bucket, name = File2DocumentService.get_storage_address(doc_id=doc_id)
 
     try:
         file_content_bytes = STORAGE_IMPL.get(bucket, name)
@@ -551,7 +594,15 @@ def fetch_full_doc_from_storage(doc_id: str) -> str | None:
         except Exception as e:
             logging.error(f"Error decoding document content for doc_id {doc_id}: {e}")
             return None
-        return full_doc_content[:DOC_MAXIMUM_SIZE]
+        
+        # 限制内容大小
+        full_doc_content = full_doc_content[:DOC_MAXIMUM_SIZE]
+        
+        # 获取文档标题并格式化内容
+        doc_title = get_document_title(doc_id)
+        formatted_content = format_document_content(full_doc_content, doc_title)
+        
+        return formatted_content
     except Exception as e:
         logging.error(f"Error fetching document content for doc_id {doc_id}: {e}")
         return None
