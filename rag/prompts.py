@@ -267,65 +267,120 @@ def full_question(tenant_id, llm_id, messages, language=None):
     today = datetime.date.today().isoformat()
     yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
     tomorrow = (datetime.date.today() + datetime.timedelta(days=1)).isoformat()
+    
     prompt = f"""
-Role: Expert in Rewriting Questions
+Role: You are an expert question rewriter with deep expertise in natural language understanding and contextual analysis.
 
-Task and steps:
-    1. Generate a full user question that would follow the conversation.
-    2. If the user's question involves relative date, you need to convert it into absolute date based on the current date, which is {today}. For example: 'yesterday' would be converted to {yesterday}.
+Core Mission:
+Transform incomplete, ambiguous, or contextual user questions into standalone, complete, and precise questions that can be understood independently.
 
-Requirements & Restrictions:
-  - If the user's latest question is completely, don't do anything, just return the original question.
-  - DON'T generate anything except a refined question."""
+Chain of Thought Process:
+<thinking>
+1. Context Analysis: Carefully analyze the entire conversation history to understand the main topic and discussion flow
+2. Reference Resolution: Identify pronouns, ellipses, and implicit references in the question, determining what specific entities they refer to
+3. Temporal Conversion: Convert relative time expressions to absolute dates (current date: {today})
+4. Completeness Check: Ensure the rewritten question contains all necessary information for independent understanding
+5. Semantic Preservation: Verify that the rewritten question maintains the exact original intent and meaning
+</thinking>
+
+Self-Consistency Verification:
+Before providing your final answer, perform these critical checks:
+- Does the rewritten question preserve the core intent of the original question?
+- Does it contain sufficient contextual information to be understood independently?
+- Are temporal expressions correctly converted to absolute dates?
+- Is the language and tone consistent with the original question?
+
+Quality Commitment:
+Your accurate rewriting directly impacts the user's ability to receive precise answers. Apply your professional expertise to ensure every rewrite is precisely crafted and contextually complete.
+
+Task Requirements:
+1. Generate a complete user question that logically follows the conversation context.
+2. Convert relative dates to absolute dates based on current date: {today}
+   - 'yesterday' becomes {yesterday}
+   - 'today' remains {today}
+   - 'tomorrow' becomes {tomorrow}
+
+Critical Guidelines:
+- If the user's latest question is already complete and clear, return the original question unchanged
+- Output ONLY the refined question without any additional explanation or commentary"""
+
     if language:
         prompt += f"""
-  - Text generated MUST be in {language}."""
+- Generated text MUST be in {language}"""
     else:
         prompt += """
-  - Text generated MUST be in the same language of the original user's question.
-"""
+- Generated text MUST be in the same language as the original user's question"""
+
     prompt += f"""
 
-######################
--Examples-
-######################
+Examples with Chain of Thought:
 
-# Example 1
+# Example 1: Pronoun Reference Resolution
 ## Conversation
 USER: What is the name of Donald Trump's father?
-ASSISTANT:  Fred Trump.
+ASSISTANT: Fred Trump.
 USER: And his mother?
-###############
+
+<thinking>
+1. Context: Discussion about Trump's family members
+2. Reference: "his" refers to Donald Trump
+3. Ellipsis: asking about mother's name
+4. Complete question: What's the name of Donald Trump's mother?
+</thinking>
+
 Output: What's the name of Donald Trump's mother?
 
 ------------
-# Example 2
+# Example 2: Chain Reference Resolution
 ## Conversation
 USER: What is the name of Donald Trump's father?
-ASSISTANT:  Fred Trump.
+ASSISTANT: Fred Trump.
 USER: And his mother?
-ASSISTANT:  Mary Trump.
-User: What's her full name?
-###############
+ASSISTANT: Mary Trump.
+USER: What's her full name?
+
+<thinking>
+1. Context: First asked about father, then mother, now asking for mother's full name
+2. Reference: "her" refers to Mary Trump (Trump's mother)
+3. Complete question: Need to specify it's about Trump's mother Mary Trump's full name
+</thinking>
+
 Output: What's the full name of Donald Trump's mother Mary Trump?
 
 ------------
-# Example 3
+# Example 3: Temporal and Location Conversion
 ## Conversation
 USER: What's the weather today in London?
-ASSISTANT:  Cloudy.
-USER: What's about tomorrow in Rochester?
-###############
+ASSISTANT: Cloudy.
+USER: What about tomorrow in Rochester?
+
+<thinking>
+1. Context: Weather inquiry
+2. Temporal conversion: "tomorrow" needs to be converted to specific date {tomorrow}
+3. Location shift: from London to Rochester
+4. Complete question: Need to include specific date and location
+</thinking>
+
 Output: What's the weather in Rochester on {tomorrow}?
 
 ######################
-# Real Data
+# Actual Task
 ## Conversation
 {conv}
-###############
-    """
-    ans = chat_mdl.chat(prompt, [{"role": "user", "content": "Output: "}], {"temperature": 1.0})
-    ans = re.sub(r"<think>.*</think>", "", ans, flags=re.DOTALL)
+
+Please analyze using the chain of thought process, perform self-consistency verification, then provide the rewritten question:
+"""
+
+    # Use lower temperature for consistency
+    ans = chat_mdl.chat(prompt, [{"role": "user", "content": "Output: "}], {"temperature": 0.3})
+    ans = re.sub(r"<thinking>.*?</thinking>", "", ans, flags=re.DOTALL)
+    ans = re.sub(r"<think>.*?</think>", "", ans, flags=re.DOTALL)
+    
+    # Clean up potential formatting markers
+    ans = ans.strip()
+    if ans.startswith("Output:"):
+        ans = ans[7:].strip()
+    
     return ans if ans.find("**ERROR**") < 0 else messages[-1]["content"]
 
 
