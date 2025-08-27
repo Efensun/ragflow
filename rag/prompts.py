@@ -374,7 +374,7 @@ Please analyze using the chain of thought process, perform self-consistency veri
 """
 
     # Use lower temperature for consistency
-    ans = chat_mdl.chat(prompt, [{"role": "user", "content": "Output: "}], {"temperature": 0.3})
+    ans = chat_mdl.chat(prompt, [{"role": "user", "content": "Output: "}], {"temperature":1.0})
     ans = re.sub(r"<thinking>.*?</thinking>", "", ans, flags=re.DOTALL)
     ans = re.sub(r"<think>.*?</think>", "", ans, flags=re.DOTALL)
     
