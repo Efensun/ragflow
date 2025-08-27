@@ -30,6 +30,14 @@ import styles from './index.less';
 const reg = /(~{2}\d+={2})/g;
 // const curReg = /(~{2}\d+\${2})/g;
 
+// 添加图片 URL 处理函数
+const processImageUrl = (url: string): string => {
+  if (!url) return url;
+  
+  // 将图片服务器地址转换为代理路径
+  return url.replace(/https?:\/\/120\.77\.38\.66:8009\/images\//, '/images/');
+};
+
 const getChunkIndex = (match: string) => Number(match.slice(2, -2));
 // TODO: The display of the table is inconsistent with the display previously placed in the MessageItem.
 const MarkdownContent = ({
@@ -199,8 +207,11 @@ const MarkdownContent = ({
     } | null>(null);
     const [isLoading, setIsLoading] = useState(true);
 
+    // 处理图片 URL
+    const processedSrc = useMemo(() => processImageUrl(src), [src]);
+
     useEffect(() => {
-      if (!src) return;
+      if (!processedSrc) return;
 
       // 使用 HTMLImageElement 而不是 Image 构造函数
       const imgElement = document.createElement('img');
@@ -211,8 +222,8 @@ const MarkdownContent = ({
       imgElement.onerror = () => {
         setIsLoading(false);
       };
-      imgElement.src = src;
-    }, [src]);
+      imgElement.src = processedSrc;
+    }, [processedSrc]);
 
     // 计算缩放后的尺寸
     const getScaledDimensions = () => {
@@ -242,7 +253,7 @@ const MarkdownContent = ({
       <div className={styles.imageContainer}>
         {isLoading && <div className={styles.imageLoading}>Loading...</div>}
         <img
-          src={src}
+          src={processedSrc}
           alt={alt || ''}
           {...rest}
           {...scaledDimensions}

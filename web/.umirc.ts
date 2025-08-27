@@ -44,6 +44,15 @@ export default defineConfig({
       logger: console,
       // pathRewrite: { '^/v1': '/v1' },
     },
+    {
+    context: ['/images'],
+    target: 'http://127.0.0.1:8009/',
+    changeOrigin: true,
+    logger: console,
+    headers: {
+      'User-Agent': 'RAGFlow-Frontend'
+    }
+      },
   ],
 
   chainWebpack(memo, args) {
