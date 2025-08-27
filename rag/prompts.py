@@ -262,6 +262,8 @@ def full_question(tenant_id, llm_id, messages, language=None):
     for m in messages:
         if m["role"] not in ["user", "assistant"]:
             continue
+        if m["role"] =="assistant":
+            m["content"] = m["content"][:100]
         conv.append("{}: {}".format(m["role"].upper(), m["content"]))
     conv = "\n".join(conv)
     today = datetime.date.today().isoformat()

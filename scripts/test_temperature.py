@@ -8,8 +8,9 @@ import sys
 import os
 import logging
 import time
-from datetime import datetime, timedelta
 from collections import defaultdict
+
+
 
 # 添加项目根目录到Python路径
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -36,11 +37,13 @@ def test_question_refinement_with_temperature_multiple_runs():
 
     # 测试参数
     tenant_id = "6a2a5a8c00a611f0883a0242ac140006"  # 需要替换为实际的tenant_id
-    llm_id = "Qwen/Qwen3-30B-A3B-FP8___LocalAI@LocalAI"  # 需要替换为实际的llm_id
+    llm_id = "gemini-2.5-flash___OpenAI-API@OpenAI-API-Compatible"  # 需要替换为实际的llm_id
 
+    system = """
+    \nRole: You are an expert question rewriter with deep expertise in natural language understanding and contextual analysis.\n\nCore Mission:\nTransform incomplete, ambiguous, or contextual user questions into standalone, complete, and precise questions that can be understood independently.\n\nChain of Thought Process:\n<thinking>\n1. Context Analysis: Carefully analyze the entire conversation history to understand the main topic and discussion flow\n2. Reference Resolution: Identify pronouns, ellipses, and implicit references in the question, determining what specific entities they refer to\n3. Temporal Conversion: Convert relative time expressions to absolute dates (current date: 2025-08-27)\n4. Completeness Check: Ensure the rewritten question contains all necessary information for independent understanding\n5. Semantic Preservation: Verify that the rewritten question maintains the exact original intent and meaning\n</thinking>\n\nSelf-Consistency Verification:\nBefore providing your final answer, perform these critical checks:\n- Does the rewritten question preserve the core intent of the original question?\n- Does it contain sufficient contextual information to be understood independently?\n- Are temporal expressions correctly converted to absolute dates?\n- Is the language and tone consistent with the original question?\n\nQuality Commitment:\nYour accurate rewriting directly impacts the user\'s ability to receive precise answers. Apply your professional expertise to ensure every rewrite is precisely crafted and contextually complete.\n\nTask Requirements:\n1. Generate a complete user question that logically follows the conversation context.\n2. Convert relative dates to absolute dates based on current date: 2025-08-27\n   - \'yesterday\' becomes 2025-08-26\n   - \'today\' remains 2025-08-27\n   - \'tomorrow\' becomes 2025-08-28\n\nCritical Guidelines:\n- If the user\'s latest question is already complete and clear, return the original question unchanged\n- Output ONLY the refined question without any additional explanation or commentary\n- Generated text MUST be in the same language as the original user\'s question\n\nExamples with Chain of Thought:\n\n# Example 1: Pronoun Reference Resolution\n## Conversation\nUSER: What is the name of Donald Trump\'s father?\nASSISTANT: Fred Trump.\nUSER: And his mother?\n\n<thinking>\n1. Context: Discussion about Trump\'s family members\n2. Reference: "his" refers to Donald Trump\n3. Ellipsis: asking about mother\'s name\n4. Complete question: What\'s the name of Donald Trump\'s mother?\n</thinking>\n\nOutput: What\'s the name of Donald Trump\'s mother?\n\n------------\n# Example 2: Chain Reference Resolution\n## Conversation\nUSER: What is the name of Donald Trump\'s father?\nASSISTANT: Fred Trump.\nUSER: And his mother?\nASSISTANT: Mary Trump.\nUSER: What\'s her full name?\n\n<thinking>\n1. Context: First asked about father, then mother, now asking for mother\'s full name\n2. Reference: "her" refers to Mary Trump (Trump\'s mother)\n3. Complete question: Need to specify it\'s about Trump\'s mother Mary Trump\'s full name\n</thinking>\n\nOutput: What\'s the full name of Donald Trump\'s mother Mary Trump?\n\n------------\n# Example 3: Temporal and Location Conversion\n## Conversation\nUSER: What\'s the weather today in London?\nASSISTANT: Cloudy.\nUSER: What about tomorrow in Rochester?\n\n<thinking>\n1. Context: Weather inquiry\n2. Temporal conversion: "tomorrow" needs to be converted to specific date 2025-08-28\n3. Location shift: from London to Rochester\n4. Complete question: Need to include specific date and location\n</thinking>\n\nOutput: What\'s the weather in Rochester on 2025-08-28?\n\n######################\n# Actual Task\n## Conversation\nUSER: 币种评论是做什么的\nASSISTANT: 您好！很高兴能为您详细解释“币种评论”是做什么的。😊\n\n“币种评论”是平台为了**丰富币种信息的全面性、提高用户活跃度和粘性**而推出的一个核心功能模块。它旨在将复杂的技术知识转化为用户易于理解和应用的实用信息，并提供一个让用户可以**查看并参与讨论**的平台。##2$$\n\n### 🌟 功能定位与目标\n\n从不同的角度来看，“币种评论”有以下几个主要目标：\n\n*   **业务层面**：\n    *   **丰富信息**：通过接入外部渠道和鼓励用户原创内容，提升币种信息的全面性。##2$$\n    *   **提高活跃度与粘性**：用户可以查看并参与讨论，从而增加在平台的互动。##2$$\n    *   **内容价值**：有价值的评论后续经过人工审核，甚至可以支持推送，扩大影响力。##2$$\n\n*   **用户层面**：\n    *   **了解动态**：用户可以通过评论了解币种最新动态，辅助交易决策。##2$$\n    *   **分享见解**：用户可以发表对币种的看法，传播自己的见解，并期望获得反馈和认同。##2$$\n\n*   **系统层面**：\n    *   **组件化**：将评论功能设计成可复用的组件，方便未来低成本地接入到其他业务模块，确保交互一致性，降低维护成本。##2$$\n\n### 🛠️ 核心功能概览\n\n“币种评论”模块包含了多个核心功能，共同构建了一个完整的互动体验：\n\n1.  **评论区类别**：支持**多向评论**，用户不仅可以发表自己的看法，还能与其他用户交流互动。##2$$\n2.  **应用业务**：主要应用于**币种资料页面**，但作为组件化功能，后续可轻松接入其他业务场景。##2$$\n3.  **包含模块**：\n    *   **账号信息展示**：显示用户的账户名、用户名和头像。\n    *   **评论输入**：提供评论和回复的入口。\n    *   **评论展示**：显示评论内容、时间、点赞/反对数等。\n    *   **评论排序**：支持**热门（Hot）**、**最新（New）**、**互动（Top）**等多种排序方式，确保热门内容不会过快沉下去，同时兼顾新内容的曝光。##2$$ ##1$$\n    *   **评论互动**：支持点赞（赞同）、点踩（反对）、举报等功能。##2$$\n    *   **消息触达**：通过站内信和推送（Push）通知用户相关的互动消息。##2$$\n4.  **风险控制**：\n    *   **关键词过滤**：通过 Admin 设置的关键词和接入的第三方 AI 机器人进行初步筛查和全面筛查。##2$$\n    *   **安全性**：防止 XSS 攻击、SQL 注入等安全漏洞。##2$$\n5.  **Admin 管理和审核**：\n    *   管理员可以管理过滤词、评论内容、待审核内容、评论账户数据，并对用户进行禁言操作。##2$$\n    *   举报人数达到阈值（例如超过10次）的评论会进入人工审核。##2$$\n\n### 📊 评论处理流程与数据结构\n\n为了实现这些功能，系统在后端设计上非常严谨：\n\n*   **数据模型**：评论和回复被设计在同一个 `Comment` 模型中，因为它们在排序、状态、投票和审核等操作上具有一致性。##3$$\n    *   ![Comment Model Fields](https://t9008230771.p.clickup-attachments.com/t9008230771/dd6f82ec-29be-4796-8f46-93ad74bf7c10/image.png)\n    *   这张图片展示了AI翻译按钮的展示逻辑，当评论本身的语言与社区语区不一致时，会显示AI翻译按钮。##2$$\n*   **评论状态**：评论会经历从 `CREATED`（刚创建，仅自己可见）到 `PUBLISHED`（审核通过，公开展示）等状态流转，确保内容合规。##3$$\n    *   ![Key Status Transitions](http://120.77.38.66:8009/images/b11e51cb651725433d85029f4e968a5a-582497.svg)\n    *   这张图描绘了评论从创建到发布、禁用或删除的关键状态流转，体现了内容审核的严谨性。##3$$\n*   **缓存设计**：为了支持高并发，系统采用了评论缓存、评论列表缓存和用户待审核评论缓存等机制。##3$$\n    *   ![Comment Cache Flow](http://120.77.38.66:8009/images/5ea402f649ab1075e820240d0276efc0-337147.svg)\n    *   这个流程图展示了评论经过初筛后如何写入数据库和缓存，确保高效处理。##3$$\n\n### ⚖️ 排序算法\n\n币种评论的排序是其核心功能之一。平台参考了 Reddit 和 Hack News 等成熟社交平台的算法，并结合自身需求进行了调整：\n\n*   **Hot 排序**：采用了类似 Reddit 故事排序的算法，平衡了用户互动（赞成-反对）和时间衰减的影响，确保热门内容和新内容都能得到曝光。##1$$ ##3$$\n    *   ![Reddit Story Sorting Formula](https://t9008230771.p.clickup-attachments.com/t9008230771/902bad48-3922-44cd-a358-021dfb5ca084/image.png)\n    *   这个公式是 Reddit 故事排序的核心，它通过调整参数来降低提交时间对评论排名的影响。##1$$\n*   **New 排序**：按发布时间倒序排列。##2$$\n*   **Top 排序**：主要基于评论互动（赞成-反对）的得分，得分高的排名靠前。##2$$\n*   **评论数量的影响**：在调研中发现，Reddit 和 Hack News 的排序算法并未将评论数量纳入考虑，而平台可能根据实际情况决定是否将其作为排序参数。##1$$\n\n### ✨ 新增打赏功能\n\n为了进一步激励优质内容创作，币种评论还计划新增**打赏功能**：\n\n*   **打赏币种**：目前仅支持 CET。##6$$\n*   **额度限制**：有每日打赏限额、现货可用余额和24小时提现额度限制。##6$$\n*   **影响排序**：打赏行为会影响评论的互动得分，从而影响其在 Hot/Top 排序中的位置。##6$$\n    *   ![Tipping Process Flow](https://t9008230771.p.clickup-attachments.com/t9008230771/8d53c84a-4d10-41fe-a675-f74fae84acef/image.png)\n    *   这张图清晰地展示了打赏的流程，从选择金额到提交确认的步骤。##6$$\n\n总而言之，“币种评论”是一个集成了内容创作、社交互动、风险控制和智能排序于一体的综合性功能，旨在为用户提供一个丰富、安全、高效的币种信息交流平台。\n\n希望这些信息对您有所帮助！如果您还有其他疑问，随时告诉我哦。😊\n\n---\n**参考链接：**\n*   [内容_币种评论_评论内容维护.md](https://app.clickup.com/9008230771/v/dc/8cexcbk-154898/8cexcbk-339878)\n*   [内容_币种评论_评论排序调研.md](https://app.clickup.com/9008230771/v/dc/8cexcbk-154898/8cexcbk-252098)\n*   [内容_币种评论.md](https://app.clickup.com/9008230771/v/dc/8cexcbk-154898/8cexcbk-247498)\n*   [币种评论方案（PG版）.md](https://viabtc.yuque.com/r.d/mibe45/fvwu1pvznekhr398)\n*   [内容_币种评论_打赏.md](https://app.clickup.com/9008230771/v/dc/8cexcbk-154898/8cexcbk-308878)\nUSER: 数据库设计啥样的\n\nPlease analyze using the chain of thought process, perform self-consistency verification, then provide the rewritten question:\n
+    """
     # 测试对话历史
-    messages = [{'role': 'user', 'content': "\nRole: Expert in Rewriting Questions\n\nTask and steps:\n    1. Generate a full user question that would follow the conversation.\n    2. If the user's question involves relative date, you need to convert it into absolute date based on the current date, which is 2025-08-18. For example: 'yesterday' would be converted to 2025-08-17.\n\nRequirements & Restrictions:\n  - If the user's latest question is completely, don't do anything, just return the original question.\n  - DON'T generate anything except a refined question.\n  - Text generated MUST be in the same language of the original user's question.\n\n\n######################\n-Examples-\n######################\n\n# Example 1\n## Conversation\nUSER: What is the name of Donald Trump's father?\nASSISTANT:  Fred Trump.\nUSER: And his mother?\n###############\nOutput: What's the name of Donald Trump's mother?\n\n------------\n# Example 2\n## Conversation\nUSER: What is the name of Donald Trump's father?\nASSISTANT:  Fred Trump.\nUSER: And his mother?\nASSISTANT:  Mary Trump.\nUser: What's her full name?\n###############\nOutput: What's the full name of Donald Trump's mother Mary Trump?\n\n------------\n# Example 3\n## Conversation\nUSER: What's the weather today in London?\nASSISTANT:  Cloudy.\nUSER: What's about tomorrow in Rochester?\n###############\nOutput: What's the weather in Rochester on 2025-08-19?\n\n######################\n# Real Data\n## Conversation\nUSER: 解释下新手礼包事故\nASSISTANT: 新手礼包事故主要涉及两个核心问题：**功能逻辑缺陷导致用户误领卡券**，以及**报表数据错误**，最终影响了活动的公平性和运营分析的准确性。以下是详细解释：\n\n---\n\n### 🔍 一、事故根本原因：领取条件校验逻辑存在严重缺陷\n\n#### 📌 问题描述：\n在六周年新手礼包活动中，系统未能正确校验用户是否满足卡券领取条件，导致**非目标用户也成功领取了卡券**，破坏了活动的精准投放和公平性。\n\n#### 🛠️ 技术细节：\n- 新增了一种“二级时间条件”（如：注册后7天内完成首次充值），这类条件不能独立验证，而是要**动态限制其他条件的生效范围**。\n- 原始代码中，该时间条件被解析后存储在实例变量中，后续验证其他条件时会读取这个变量。\n- **但问题出在：** 如果“二级时间条件”没有放在所有条件的**第一个**，系统就无法正确获取该时间范围，导致后续条件校验失效。\n  - 举例：用户注册时间在活动开始后第10天，但配置的条件是“注册7天内完成充值”，本应不满足。但由于时间条件未被正确识别，系统误判为满足，允许领取。\n\n> ✅ **修复方案**：在验证任何条件前，先扫描所有条件，统一提取并保存“二级时间条件”到一个共享的元变量中，确保无论顺序如何，都能正确限制范围。##2$$\n\n---\n\n### 📊 二、报表数据错误：数据源缺失 + 逻辑错误双重打击\n\n#### 📌 问题表现：\n- 活动期间的报表数据显示异常，无法准确反映真实用户参与情况。\n- 活动结束后，部分数据无法修复，影响了后续运营决策。\n\n#### 🛠️ 原因分析：\n1. **前端上报接口未正常工作**：\n   - 前端配置错误，导致关键事件（如“卡券领取成功”）没有上报。\n   - 事件追踪系统依赖上报数据生成报表，数据缺失直接导致报表为空或错误。\n\n2. **后端逻辑错误叠加**：\n   - 由于领取条件校验失败，大量非目标用户领取了卡券，但这些数据仍被计入报表。\n   - 报表系统没有做去重或异常过滤，导致数据严重失真。\n\n> 💡 **关键教训**：上线前未在真实环境测试前端事件上报，也未对复杂条件逻辑进行充分自测，是事故扩大的主因。##2$$\n\n---\n\n### ✅ 三、事故处理与改进措施\n\n| 问题 | 解决方案 |\n|------|----------|\n| 卡券误发 | 活动第三天上线修复补丁，阻止非目标用户继续领取 ##2$$ |\n| 报表数据错误 | 活动期间手动导出原始数据，活动结束后通过修复后的报表系统重新计算并修正数据 |\n| 防止再发生 | 强化需求评估流程，复杂功能需组长评审；增加单元测试和线上验证环节 |\n\n---\n\n### 📌 总结：事故本质是“设计缺陷 + 测试缺失”叠加\n\n> 新手礼包事故并非单一技术故障，而是：\n> - **需求设计不合理**：强行引入“二级时间条件”打破原有“独立条件并集”的逻辑；\n> - **开发验证不足**：未在真实场景下测试条件顺序、数据上报等关键路径；\n> - **缺乏兜底机制**：报表系统未设置异常检测与数据校验。\n\n> ⚠️ 启示：复杂功能必须“先设计、再开发、后验证”，避免“边做边改”带来连锁风险。##2$$\n\n--- \n\n📌 **建议**：如你正在运营类似活动，务必：\n- 严格测试条件组合顺序；\n- 上线前模拟真实用户行为验证事件上报；\n- 建立报表数据校验机制，发现异常及时预警。\nUSER: 结合图片说明\n###############\n    "}]
-
+    messages = [{'role': 'user', 'content': 'Output: '}]
     # 测试不同的温度值
     temperatures = [0.1, 0.2, 0.3, 0.5, 0.7, 0.9, 1.0]
     runs_per_temperature = 5  # 每个温度测试5次
@@ -80,7 +83,7 @@ def test_question_refinement_with_temperature_multiple_runs():
                 logging.info(f"使用温度 {temp} 调用模型 - 第 {run + 1} 次")
 
                 start_time = time.time()
-                result = chat_mdl.chat(None,history=messages, gen_conf=gen_conf)
+                result = chat_mdl.chat(system, history=messages, gen_conf=gen_conf)
                 end_time = time.time()
 
                 # 清理结果
@@ -106,185 +109,6 @@ def test_question_refinement_with_temperature_multiple_runs():
 
     # 分析结果
     analyze_results(all_results, temperatures)
-
-
-def test_multiple_questions_with_temperature_multiple_runs():
-    """
-    测试多个问题在不同温度下的改写效果 - 每个温度测试5次
-    """
-
-    # 配置日志
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s %(levelname)-8s %(process)d %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
-
-    # 测试参数
-    tenant_id = "your_tenant_id"  # 需要替换为实际的tenant_id
-    llm_id = "your_llm_id"  # 需要替换为实际的llm_id
-
-    # 测试多个对话场景
-    test_cases = [
-        {
-            "name": "卡券职能投放场景",
-            "messages": [
-                {"role": "user", "content": "解释下卡券职能投放"},
-                {"role": "assistant",
-                 "content": "卡券职能投放是指通过系统自动或手动方式将优惠券、礼品卡等发放给指定用户群体的过程。"},
-                {"role": "user", "content": "解释下新手礼包事故"},
-                {"role": "assistant",
-                 "content": "新手礼包事故是指在发放新手礼包过程中出现的异常情况，如重复发放、发放失败等。"},
-                {"role": "user", "content": "结合图片进行说明"}
-            ]
-        },
-        {
-            "name": "技术文档场景",
-            "messages": [
-                {"role": "user", "content": "什么是API？"},
-                {"role": "assistant", "content": "API是应用程序编程接口的缩写，是不同软件应用程序之间进行通信的接口。"},
-                {"role": "user", "content": "RESTful API有什么特点？"},
-                {"role": "assistant", "content": "RESTful API具有无状态、可缓存、统一接口等特点。"},
-                {"role": "user", "content": "如何设计一个好的API？"}
-            ]
-        },
-        {
-            "name": "简单对话场景",
-            "messages": [
-                {"role": "user", "content": "今天天气怎么样？"},
-                {"role": "assistant", "content": "今天天气晴朗，温度25度。"},
-                {"role": "user", "content": "明天呢？"}
-            ]
-        }
-    ]
-
-    # 测试温度值
-    temperatures = [0.1, 0.3, 0.5, 0.7, 0.9]
-    runs_per_temperature = 5  # 每个温度测试5次
-
-    try:
-        chat_mdl = LLMBundle(tenant_id, LLMType.CHAT, llm_id)
-        print(f"成功创建LLM模型: {chat_mdl.llm_name}")
-        print()
-    except Exception as e:
-        print(f"创建LLM模型失败: {e}")
-        return
-
-    for test_case in test_cases:
-        print("=" * 100)
-        print(f"测试场景: {test_case['name']}")
-        print("=" * 100)
-
-        messages = test_case["messages"]
-        original_question = messages[-1]["content"]
-        print(f"原始问题: {original_question}")
-        print(f"对话历史: {[msg['content'] for msg in messages[:-1]]}")
-        print(f"每个温度测试次数: {runs_per_temperature}")
-        print()
-
-        # 存储当前场景的结果
-        scene_results = defaultdict(list)
-
-        for temp in temperatures:
-            print(f"温度 {temp}:")
-
-            for run in range(runs_per_temperature):
-                print(f"  第 {run + 1} 次:")
-
-                try:
-                    # 构建对话历史
-                    conv = []
-                    for m in messages:
-                        if m["role"] in ["user", "assistant"]:
-                            conv.append("{}: {}".format(m["role"].upper(), m["content"]))
-                    conv = "\n".join(conv)
-
-                    # 构建prompt
-                    today = datetime.now().date().isoformat()
-                    yesterday = (datetime.now().date() - timedelta(days=1)).isoformat()
-                    tomorrow = (datetime.now().date() + timedelta(days=1)).isoformat()
-
-                    prompt = f"""
-Role: Expert in Rewriting Questions
-
-Task and steps:
-    1. Generate a full user question that would follow the conversation.
-    2. If the user's question involves relative date, you need to convert it into absolute date based on the current date, which is {today}. For example: 'yesterday' would be converted to {yesterday}.
-
-Requirements & Restrictions:
-  - If the user's latest question is completely, don't do anything, just return the original question.
-  - DON'T generate anything except a refined question.
-  - Text generated MUST be in the same language of the original user's question.
-
-######################
--Examples-
-######################
-
-# Example 1
-## Conversation
-USER: What is the name of Donald Trump's father?
-ASSISTANT:  Fred Trump.
-USER: And his mother?
-###############
-Output: What's the name of Donald Trump's mother?
-
-------------
-# Example 2
-## Conversation
-USER: What is the name of Donald Trump's father?
-ASSISTANT:  Fred Trump.
-USER: And his mother?
-ASSISTANT:  Mary Trump.
-User: What's her full name?
-###############
-Output: What's the full name of Donald Trump's mother Mary Trump?
-
-------------
-# Example 3
-## Conversation
-USER: What's the weather today in London?
-ASSISTANT:  Cloudy.
-USER: What's about tomorrow in Rochester?
-###############
-Output: What's the weather in Rochester on {tomorrow}?
-
-######################
-# Real Data
-## Conversation
-{conv}
-###############
-"""
-
-                    # 调用模型
-                    gen_conf = {"temperature": temp}
-                    start_time = time.time()
-                    result = chat_mdl.chat(prompt, [{"role": "user", "content": "Output: "}], gen_conf)
-                    end_time = time.time()
-
-                    # 清理结果
-                    import re
-                    result = re.sub(r"<think>.*</think>", "", result, flags=re.DOTALL)
-
-                    if result.find("**ERROR**") >= 0:
-                        print(f"    错误: {result}")
-                        scene_results[temp].append({"error": result, "time": end_time - start_time})
-                    else:
-                        print(f"    {result}")
-                        scene_results[temp].append({"result": result, "time": end_time - start_time})
-
-                    # 添加延迟避免API限制
-                    time.sleep(1)
-
-                except Exception as e:
-                    print(f"    错误: {e}")
-                    scene_results[temp].append({"error": str(e), "time": 0})
-
-            print()
-
-        # 分析当前场景的结果
-        print("当前场景结果分析:")
-        analyze_results(scene_results, temperatures)
-        print()
 
 
 def analyze_results(results, temperatures):
