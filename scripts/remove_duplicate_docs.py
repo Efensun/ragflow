@@ -11,10 +11,10 @@ python remove_duplicate_docs.py <kb_id>
 3. 如果都不包含 yuque.com，优先保留创建时间最新的文档
 """
 
-import os
-import sys
-import re
 import logging
+import os
+import re
+import sys
 from collections import defaultdict
 from typing import Dict, List, Tuple, Optional
 
@@ -31,8 +31,6 @@ from api.db import FileSource
 from api.db.db_models import File
 from rag.nlp.search import fetch_full_doc_from_storage
 from rag.utils.storage_factory import STORAGE_IMPL
-from rag.nlp import search
-from api import settings
 
 # 配置日志
 logging.basicConfig(
