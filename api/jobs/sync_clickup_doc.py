@@ -157,7 +157,6 @@ def process_doc_content(doc_data, parent_name="", last_sync_time=None):
         doc_content = doc.get('content', '')
         doc_created = doc.get('date_created')
         doc_updated = doc.get('date_updated')
-        doc_id = doc.get('id')
         # 检查是否需要同步（基于创建时间或更新时间）
         should_sync = False
         if "测试报告" in doc_name:
@@ -178,7 +177,6 @@ def process_doc_content(doc_data, parent_name="", last_sync_time=None):
             # 创建完整的文档名称
             full_name = f"{prefix}{doc_name}" if prefix else doc_name
             doc_id = doc.get('doc_id')
-            id = doc.get('id')
             workspace_id = doc.get('workspace_id')
             origin_url = f"{origin_url_prefix}/{workspace_id}/v/dc/{doc_id}/{id}"
             doc_content = f"{doc_content}\n\n[Origin URL]({origin_url})"
@@ -190,7 +188,7 @@ def process_doc_content(doc_data, parent_name="", last_sync_time=None):
                 'content': doc_content,
                 'date_created': doc_created,
                 'date_updated': doc_updated,
-                'doc_id':doc_id
+                'doc_id':doc.get('id')
             })
 
             logger.info(f"文档需要同步: {full_name}, 创建时间: {doc_created}")
@@ -584,7 +582,7 @@ def get_clickup_docs():
                         doc['name'],
                         ragflow_parent_id,
                         ragflow_kb_id,
-                        doc['id']
+                        doc['doc_id']
                     )
 
                     if success:
