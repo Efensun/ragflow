@@ -19,14 +19,16 @@ from datetime import datetime
 import peewee
 from werkzeug.security import generate_password_hash, check_password_hash
 
-from api.db import UserTenantRole
+from api import settings
+from api.db import UserTenantRole, FileType
 from api.db.db_models import DB, UserTenant
 from api.db.db_models import User, Tenant
 from api.db.services.common_service import CommonService
+from api.db.services.llm_service import TenantLLMService, LLMService
 from api.utils import get_uuid, current_timestamp, datetime_format
 from api.db import StatusEnum
 from rag.settings import MINIO
-
+import logging
 
 class UserService(CommonService):
     """Service class for managing user-related database operations.
@@ -166,6 +168,65 @@ class TenantService(CommonService):
     def user_gateway(cls, tenant_id):
         hashobj = hashlib.sha256(tenant_id.encode("utf-8"))
         return int(hashobj.hexdigest(), 16)%len(MINIO)
+
+    @classmethod
+    @DB.connection_context()
+    def create_tenant_resources(cls, tenant_id_for_new_user, nickname_for_new_user, user_id_of_new_user):
+        from api.db.services.file_service import FileService
+        """
+        为用户创建租户及相关默认资源。
+        """
+        tenant = {
+            "id": tenant_id_for_new_user,
+            "name": nickname_for_new_user + "'s Kingdom",
+            "llm_id": settings.CHAT_MDL,
+            "embd_id": settings.EMBEDDING_MDL,
+            "asr_id": settings.ASR_MDL,
+            "parser_ids": settings.PARSERS,
+            "img2txt_id": settings.IMAGE2TEXT_MDL,
+            "rerank_id": settings.RERANK_MDL,
+            "tts_id": settings.TTS_MDL if hasattr(settings, "TTS_MDL") else "",
+        }
+        usr_tenant_owner_link = {
+            "id": get_uuid(),
+            "tenant_id": tenant_id_for_new_user,
+            "user_id": user_id_of_new_user,
+            "invited_by": user_id_of_new_user,
+            "role": UserTenantRole.OWNER.value,
+        }
+        file_id = get_uuid()
+        root_file = {
+            "id": file_id,
+            "parent_id": file_id,
+            "tenant_id": tenant_id_for_new_user,
+            "created_by": user_id_of_new_user,
+            "name": "/",
+            "type": FileType.FOLDER.value,
+            "size": 0,
+            "location": "",
+        }
+        tenant_llm_configs = []
+        if hasattr(settings, "LLM_FACTORY") and settings.LLM_FACTORY:
+            for llm in LLMService.query(fid=settings.LLM_FACTORY):
+                tenant_llm_configs.append({
+                    "tenant_id": tenant_id_for_new_user,
+                    "llm_factory": settings.LLM_FACTORY,
+                    "llm_name": llm.llm_name,
+                    "model_type": llm.model_type,
+                    "api_key": settings.API_KEY if hasattr(settings, "API_KEY") else "",
+                    "api_base": settings.LLM_BASE_URL if hasattr(settings, "LLM_BASE_URL") else "",
+                    "max_tokens": llm.max_tokens if llm.max_tokens else 8192
+                })
+
+        cls.insert(**tenant)
+        UserTenantService.insert(**usr_tenant_owner_link)
+        if tenant_llm_configs:
+            TenantLLMService.insert_many(tenant_llm_configs)
+        FileService.insert(root_file)
+        logging.info(
+            f"Created tenant resources for user ID {user_id_of_new_user} (Tenant ID: {tenant_id_for_new_user})")
+
+
 
 
 class UserTenantService(CommonService):

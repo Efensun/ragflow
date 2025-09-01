@@ -14,6 +14,7 @@
 #  limitations under the License.
 #
 import json
+import logging
 import os
 
 from flask import request
@@ -34,6 +35,7 @@ from api import settings
 from rag.nlp import search
 from api.constants import DATASET_NAME_LIMIT
 from rag.settings import PAGERANK_FLD
+
 
 
 @manager.route('/create', methods=['post'])  # noqa: F821
@@ -62,7 +64,11 @@ def create():
         req["created_by"] = current_user.id
         e, t = TenantService.get_by_id(current_user.id)
         if not e:
-            return get_data_error_result(message="Tenant not found.")
+            logging.warning(f"User {current_user.id} has no tenant,creating personal tenant.")
+            TenantService.create_tenant_resources(current_user.id, current_user.nickname, current_user.id)
+            e, t = TenantService.get_by_id(current_user.id)
+            if not e:
+                return get_data_error_result(message="Tenant not found.")
         req["embd_id"] = t.embd_id
         if not KnowledgebaseService.save(**req):
             return get_data_error_result()

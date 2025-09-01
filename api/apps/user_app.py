@@ -479,61 +479,6 @@ def rollback_user_registration(user_id):
         pass
 
 
-def _create_own_tenant_resources(tenant_id_for_new_user, nickname_for_new_user, user_id_of_new_user):
-    """
-    辅助函数：为新用户创建其自有的租户及相关默认资源。
-    """
-    tenant = {
-        "id": tenant_id_for_new_user,
-        "name": nickname_for_new_user + "‘s Kingdom",
-        "llm_id": settings.CHAT_MDL,
-        "embd_id": settings.EMBEDDING_MDL,
-        "asr_id": settings.ASR_MDL,
-        "parser_ids": settings.PARSERS,
-        "img2txt_id": settings.IMAGE2TEXT_MDL,
-        "rerank_id": settings.RERANK_MDL,
-        "tts_id": settings.TTS_MDL if hasattr(settings, "TTS_MDL") else "", # 添加TTS_MDL
-    }
-    usr_tenant_owner_link = {
-        "id": get_uuid(), 
-        "tenant_id": tenant_id_for_new_user,
-        "user_id": user_id_of_new_user,
-        "invited_by": user_id_of_new_user, 
-        "role": UserTenantRole.OWNER.value,
-    }
-    file_id = get_uuid()
-    root_file = {
-        "id": file_id,
-        "parent_id": file_id,
-        "tenant_id": tenant_id_for_new_user,
-        "created_by": user_id_of_new_user,
-        "name": "/",
-        "type": FileType.FOLDER.value,
-        "size": 0,
-        "location": "",
-    }
-    tenant_llm_configs = []
-    if hasattr(settings, "LLM_FACTORY") and settings.LLM_FACTORY:
-        for llm in LLMService.query(fid=settings.LLM_FACTORY):
-            tenant_llm_configs.append(
-                {
-                    "tenant_id": tenant_id_for_new_user,
-                    "llm_factory": settings.LLM_FACTORY,
-                    "llm_name": llm.llm_name,
-                    "model_type": llm.model_type,
-                    "api_key": settings.API_KEY if hasattr(settings, "API_KEY") else "",
-                    "api_base": settings.LLM_BASE_URL if hasattr(settings, "LLM_BASE_URL") else "",
-                    "max_tokens": llm.max_tokens if llm.max_tokens else 8192
-                }
-            )
-    
-    TenantService.insert(**tenant)
-    UserTenantService.insert(**usr_tenant_owner_link)
-    if tenant_llm_configs:
-        TenantLLMService.insert_many(tenant_llm_configs)
-    FileService.insert(root_file)
-    logging.info(f"Created own tenant resources for user ID {user_id_of_new_user} (Tenant ID: {tenant_id_for_new_user})")
-
 
 def user_register(user_id, user_info, 
                   assign_to_existing_tenant_id=None, 
@@ -564,10 +509,9 @@ def user_register(user_id, user_info,
         logging.info(f"User {user_info.get('email')} (ID: {user_id}) assigned to existing tenant {assign_to_existing_tenant_id} with role {role_in_assigned_tenant}.")
     else:
         # 为用户创建新的个人租户 (租户ID与用户ID相同)
-        _create_own_tenant_resources(tenant_id_for_new_user=user_id, 
+        TenantService.create_tenant_resources(tenant_id_for_new_user=user_id,
                                      nickname_for_new_user=user_info["nickname"], 
                                      user_id_of_new_user=user_id)
-        # logging 已在 _create_own_tenant_resources 中
 
     # 查询并返回刚创建或刚被引用的用户记录
     return UserService.query(email=user_info["email"])
