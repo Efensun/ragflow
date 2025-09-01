@@ -73,7 +73,7 @@ def get_last_sync_time():
     except Exception as e:
         logger.error(f"读取同步时间失败: {e}")
 
-    default_date = datetime(2024, 7, 20)
+    default_date = datetime(2023, 1, 1)
     default_time = int(default_date.timestamp() * 1000)
     logger.warning("使用默认同步时间（2024-07-20）")
     return default_time
@@ -628,74 +628,82 @@ def start_index():
 
             logger.info(f"文件夹 {folder_name} 中有 {len(clickup_docs)} 个ClickUp文档")
 
-            for doc in clickup_docs:
-                total_processed += 1
-                try:
-                    # 检查文档状态
-                    if doc.run == TaskStatus.RUNNING.value:
-                        logger.debug(f"文档 {doc.name} 已在处理中，跳过")
-                        continue
-
-                    if doc.progress >= 1.0:
-                        logger.debug(f"文档 {doc.name} 已完成处理 (进度: {doc.progress})")
-                        continue
-
-                    logger.info(f"启动文档处理: {doc.name}")
-
-                    # 清除旧的处理记录
+            batch_size = 20
+            for i in range(0, len(clickup_docs), batch_size):
+                batch_docs = clickup_docs[i:i + batch_size]
+                current_batch = i // batch_size + 1
+                batch_success_count = 0
+                for doc in batch_docs:
+                    total_processed += 1
                     try:
-                        from rag.nlp import search
-                        from api import settings
+                        # 检查文档状态
+                        if doc.run == TaskStatus.RUNNING.value:
+                            logger.debug(f"文档 {doc.name} 已在处理中，跳过")
+                            continue
 
+                        if doc.progress >= 1.0:
+                            logger.debug(f"文档 {doc.name} 已完成处理 (进度: {doc.progress})")
+                            continue
+
+                        logger.info(f"启动文档处理: {doc.name}")
+
+                        # 清除旧的处理记录
+                        try:
+                            from rag.nlp import search
+                            from api import settings
+
+                            tenant_id = DocumentService.get_tenant_id(doc.id)
+                            if tenant_id:
+                                # 删除现有任务
+                                TaskService.filter_delete([Task.doc_id == doc.id])
+
+                                # 清除索引数据
+                                if settings.docStoreConn.indexExist(search.index_name(tenant_id), doc.kb_id):
+                                    settings.docStoreConn.delete({"doc_id": doc.id}, search.index_name(tenant_id),
+                                                                 doc.kb_id)
+                            batch_success_count += 1
+                        except Exception as clean_e:
+                            logger.warning(f"清除旧数据失败: {clean_e}")
+
+                        # 设置文档为运行状态
+                        update_info = {
+                            "run": TaskStatus.RUNNING.value,
+                            "progress": 0,
+                            "progress_msg": "开始处理",
+                            "chunk_num": 0,
+                            "token_num": 0
+                        }
+
+                        success = DocumentService.update_by_id(doc.id, update_info)
+                        if not success:
+                            logger.error(f"更新文档状态失败: {doc.name}")
+                            continue
+
+                        # 获取租户ID
                         tenant_id = DocumentService.get_tenant_id(doc.id)
-                        if tenant_id:
-                            # 删除现有任务
-                            TaskService.filter_delete([Task.doc_id == doc.id])
+                        if not tenant_id:
+                            logger.error(f"获取租户ID失败: {doc.name}")
+                            continue
 
-                            # 清除索引数据
-                            if settings.docStoreConn.indexExist(search.index_name(tenant_id), doc.kb_id):
-                                settings.docStoreConn.delete({"doc_id": doc.id}, search.index_name(tenant_id),
-                                                             doc.kb_id)
+                        # 准备文档信息用于队列处理
+                        doc_dict = doc.to_dict()
+                        doc_dict["tenant_id"] = tenant_id
 
-                    except Exception as clean_e:
-                        logger.warning(f"清除旧数据失败: {clean_e}")
+                        # 获取文件存储地址
+                        bucket, name = File2DocumentService.get_storage_address(doc_id=doc.id)
 
-                    # 设置文档为运行状态
-                    update_info = {
-                        "run": TaskStatus.RUNNING.value,
-                        "progress": 0,
-                        "progress_msg": "开始处理",
-                        "chunk_num": 0,
-                        "token_num": 0
-                    }
+                        # 将文档加入处理队列
+                        queue_tasks(doc_dict, bucket, name, 0)
 
-                    success = DocumentService.update_by_id(doc.id, update_info)
-                    if not success:
-                        logger.error(f"更新文档状态失败: {doc.name}")
+                        total_started += 1
+                        logger.info(f"文档 {doc.name} 已加入处理队列")
+
+                    except Exception as e:
+                        logger.error(f"处理文档 {doc.name} 时出错: {e}")
                         continue
 
-                    # 获取租户ID
-                    tenant_id = DocumentService.get_tenant_id(doc.id)
-                    if not tenant_id:
-                        logger.error(f"获取租户ID失败: {doc.name}")
-                        continue
-
-                    # 准备文档信息用于队列处理
-                    doc_dict = doc.to_dict()
-                    doc_dict["tenant_id"] = tenant_id
-
-                    # 获取文件存储地址
-                    bucket, name = File2DocumentService.get_storage_address(doc_id=doc.id)
-
-                    # 将文档加入处理队列
-                    queue_tasks(doc_dict, bucket, name, 0)
-
-                    total_started += 1
-                    logger.info(f"文档 {doc.name} 已加入处理队列")
-
-                except Exception as e:
-                    logger.error(f"处理文档 {doc.name} 时出错: {e}")
-                    continue
+                    time.sleep(30)
+                logger.info(f"第 {current_batch} 批处理完成，成功: {batch_success_count}/{len(batch_docs)}")
 
         logger.info(f"索引启动完成！检查文档总数: {total_processed}, 启动处理文档数: {total_started}")
 
