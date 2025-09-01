@@ -24,7 +24,6 @@ from api.db import UserTenantRole, FileType
 from api.db.db_models import DB, UserTenant
 from api.db.db_models import User, Tenant
 from api.db.services.common_service import CommonService
-from api.db.services.llm_service import TenantLLMService, LLMService
 from api.utils import get_uuid, current_timestamp, datetime_format
 from api.db import StatusEnum
 from rag.settings import MINIO
@@ -173,6 +172,7 @@ class TenantService(CommonService):
     @DB.connection_context()
     def create_tenant_resources(cls, tenant_id_for_new_user, nickname_for_new_user, user_id_of_new_user):
         from api.db.services.file_service import FileService
+        from api.db.services.llm_service import TenantLLMService, LLMService
         """
         为用户创建租户及相关默认资源。
         """
