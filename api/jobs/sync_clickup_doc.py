@@ -153,11 +153,11 @@ def process_doc_content(doc_data, parent_name="", last_sync_time=None):
     origin_url_prefix = "https://app.clickup.com"
 
     def extract_content(doc, prefix=""):
-        doc_name = doc.get('name', '')
+        doc_name = doc.get('name', '') or ''
         doc_content = doc.get('content', '')
         doc_created = doc.get('date_created')
         doc_updated = doc.get('date_updated')
-
+        doc_id = doc.get('id')
         # 检查是否需要同步（基于创建时间或更新时间）
         should_sync = False
         if "测试报告" in doc_name:
@@ -189,7 +189,8 @@ def process_doc_content(doc_data, parent_name="", last_sync_time=None):
                 'name': full_name,
                 'content': doc_content,
                 'date_created': doc_created,
-                'date_updated': doc_updated
+                'date_updated': doc_updated,
+                'doc_id':doc_id
             })
 
             logger.info(f"文档需要同步: {full_name}, 创建时间: {doc_created}")
@@ -583,7 +584,7 @@ def get_clickup_docs():
                         doc['name'],
                         ragflow_parent_id,
                         ragflow_kb_id,
-                        doc_id
+                        doc['id']
                     )
 
                     if success:
