@@ -75,7 +75,7 @@ def get_last_sync_time():
 
     default_date = datetime(2023, 1, 1)
     default_time = int(default_date.timestamp() * 1000)
-    logger.warning("使用默认同步时间（2024-07-20）")
+    logger.warning("使用默认同步时间（2023-01-1）")
     return default_time
 
 
@@ -160,6 +160,9 @@ def process_doc_content(doc_data, parent_name="", last_sync_time=None):
 
         # 检查是否需要同步（基于创建时间或更新时间）
         should_sync = False
+        if "测试报告" in doc_name:
+            logger.info(f"跳过测试报告: {doc_name}")
+            return False
         if last_sync_time:
             # 检查创建时间
             if doc_created and should_sync_doc(doc_created, last_sync_time):
