@@ -664,7 +664,7 @@ def start_index():
                                 if settings.docStoreConn.indexExist(search.index_name(tenant_id), doc.kb_id):
                                     settings.docStoreConn.delete({"doc_id": doc.id}, search.index_name(tenant_id),
                                                                  doc.kb_id)
-                            batch_success_count += 1
+
                         except Exception as clean_e:
                             logger.warning(f"清除旧数据失败: {clean_e}")
 
@@ -697,15 +697,15 @@ def start_index():
 
                         # 将文档加入处理队列
                         queue_tasks(doc_dict, bucket, name, 0)
-
+                        batch_success_count += 1
                         total_started += 1
                         logger.info(f"文档 {doc.name} 已加入处理队列")
-
+                        time.sleep(30)
                     except Exception as e:
                         logger.error(f"处理文档 {doc.name} 时出错: {e}")
                         continue
 
-                    time.sleep(30)
+
                 logger.info(f"第 {current_batch} 批处理完成，成功: {batch_success_count}/{len(batch_docs)}")
 
         logger.info(f"索引启动完成！检查文档总数: {total_processed}, 启动处理文档数: {total_started}")
