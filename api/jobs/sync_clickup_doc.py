@@ -31,7 +31,6 @@ logger.info("=" * 50)
 logger.info("ClickUp文档同步脚本启动")
 logger.info("=" * 50)
 
-
 try:
     settings.init_settings()
     logger.info("RAGFlow 设置初始化成功")
@@ -390,7 +389,7 @@ def update_existing_file(file_id, new_content, new_name=None):
         return False, str(e)
 
 
-def upload_doc_to_ragflow(doc_content, doc_name, parent_folder_id, kb_id):
+def upload_doc_to_ragflow(doc_content, doc_name, parent_folder_id, kb_id, doc_id):
     """上传文档到RAGFlow文件服务的指定文件夹并绑定到知识库"""
     try:
         # 检查父文件夹ID和知识库ID是否设置
@@ -406,7 +405,7 @@ def upload_doc_to_ragflow(doc_content, doc_name, parent_folder_id, kb_id):
         filename = f"{doc_name}.md"
 
         # 检查文件是否已存在
-        existing_files = FileService.query(name=filename, parent_id=parent_folder_id)
+        existing_files = FileService.query(location=doc_id, parent_id=parent_folder_id)
 
         if existing_files:
             logger.info(f"文档 {filename} 已存在，检查内容是否有变化")
@@ -461,9 +460,7 @@ def upload_doc_to_ragflow(doc_content, doc_name, parent_folder_id, kb_id):
             filetype = FileType.DOC.value
 
         # 生成唯一的存储位置名称
-        location = filename
-        while STORAGE_IMPL.obj_exist(parent_folder_id, location):
-            location += "_"
+        location = doc_id
 
         # 将 Markdown 内容转换为字节
         blob = doc_content.encode('utf-8')
@@ -475,7 +472,7 @@ def upload_doc_to_ragflow(doc_content, doc_name, parent_folder_id, kb_id):
             "tenant_id": TENANT_ID,
             "created_by": TENANT_ID,
             "type": filetype,
-            "name": filename,  # 直接使用原始文件名
+            "name": filename,
             "location": location,
             "size": len(blob),
             "source_type": ""
@@ -582,7 +579,8 @@ def get_clickup_docs():
                         doc['content'],
                         doc['name'],
                         ragflow_parent_id,
-                        ragflow_kb_id
+                        ragflow_kb_id,
+                        doc_id
                     )
 
                     if success:
@@ -961,6 +959,7 @@ def run():
             time.sleep(60)  # 每分钟检查一次
     except KeyboardInterrupt:
         logger.info("停止同步任务")
+
 
 if __name__ == "__main__":
     import sys
