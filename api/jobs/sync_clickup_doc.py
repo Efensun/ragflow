@@ -613,6 +613,10 @@ def get_clickup_docs():
                     for doc in doc_pages:
                         page_id = doc.get('id')
                         doc_content_response = get_doc_pages(page_id)
+                        if not doc_content_response:
+                            error_count+=1
+                            logger.error(f"通过子页面获取文档内容失败: {doc_name}")
+                            continue
                         if doc_content_response:
                             documents += process_doc_content(
                                 doc_content_response,
