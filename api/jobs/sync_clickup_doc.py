@@ -105,8 +105,8 @@ def get_all_pages(parent_id):
         return None
 
 
-def get_doc_content(doc_id):
-    """获取ClickUp文档内容"""
+def get_doc_pages(doc_id):
+    """获取ClickUp某个目录下所有文档,包含内容"""
     url = f"https://api.clickup.com/api/v3/workspaces/{WORKSPACE_ID}/docs/{doc_id}/pages?max_page_depth=-1&content_format=text%2Fmd"
 
     headers = {
@@ -122,6 +122,48 @@ def get_doc_content(doc_id):
     except Exception as e:
         logger.error(f"获取文档内容失败 {doc_id}: {e}")
         return None
+
+def get_doc_by_page_listing(workspace_id, doc_id):
+    """获取某个目录下所有子文档信息，但是不包括内容"""
+    page_list_url = f"https://api.clickup.com/api/v3/workspaces/{workspace_id}/docs/{doc_id}/pageListing"
+
+
+    headers = {
+        "accept": "application/json",
+        "Authorization": CLICKUP_TOKEN
+    }
+    try:
+        response = requests.get(page_list_url, headers=headers)
+        response.raise_for_status()
+        logger.debug(f"成功获取子文档，doc_id: {doc_id}")
+        return response.json()
+    except Exception as e:
+        logger.error(f"获取子文档内容失败 {doc_id}: {e}")
+        return None
+
+
+def get_doc_content_by_page_id(workspace_id, doc_id, page_id):
+    """
+    获取某个页面内容,不包含子页面内容
+    workspace_id: 工作空间ID
+    doc_id: 父文档ID
+    page_id: 页面ID，当前页唯一id
+    """
+    url = f"https://api.clickup.com/api/v3/workspaces/{workspace_id}/docs/{doc_id}/pages/{page_id}"
+
+    headers = {
+        "accept": "application/json",
+        "Authorization": CLICKUP_TOKEN
+    }
+
+
+    res = requests.get(url, headers=headers)
+    if res.status_code == 200:
+        return res.json()
+    else:
+        logger.error(f"获取页面内容失败 {doc_id}: {res.text}")
+        return None
+
 
 
 def should_sync_doc(doc_created_time, last_sync_time):
@@ -178,7 +220,7 @@ def process_doc_content(doc_data, parent_name="", last_sync_time=None):
             full_name = f"{prefix}{doc_name}" if prefix else doc_name
             doc_id = doc.get('doc_id')
             workspace_id = doc.get('workspace_id')
-            origin_url = f"{origin_url_prefix}/{workspace_id}/v/dc/{doc_id}/{id}"
+            origin_url = f"{origin_url_prefix}/{workspace_id}/v/dc/{doc_id}/{doc.get('id')}"
             doc_content = f"{doc_content}\n\n[Origin URL]({origin_url})"
             if parent_name:
                 full_name = f"{parent_name}_{full_name}"
@@ -532,6 +574,9 @@ def get_clickup_docs():
     ]
 
     for clickup_folder_id, ragflow_parent_id, ragflow_kb_id, folder_desc in folders:
+
+        documents = []
+
         logger.info(f"开始处理{folder_desc}...")
 
         # 获取所有页面（不过滤时间）
@@ -557,17 +602,30 @@ def get_clickup_docs():
                 logger.debug(f"检查文档: {doc_name}, 创建时间: {page_created}")
 
                 # 获取文档内容
-                doc_content_response = get_doc_content(doc_id)
+                doc_content_response = get_doc_pages(doc_id)
                 if not doc_content_response:
-                    error_count += 1
-                    continue
-
-                # 处理文档内容并根据时间过滤
-                documents = process_doc_content(
-                    doc_content_response,
-                    doc_name,
-                    last_sync_time
-                )
+                    logger.error(f"当前page_id获取文档内容失败: {doc_name}")
+                    # 获取子页面获取文档
+                    doc_pages = get_doc_by_page_listing(page.get('workspace_id'), doc_id)
+                    if not doc_pages:
+                        logger.error(f"通过page_id和workspace_id获取文档内容失败: {doc_name}")
+                        continue
+                    for doc in doc_pages:
+                        page_id = doc.get('id')
+                        doc_content_response = get_doc_pages(page_id)
+                        if doc_content_response:
+                            documents += process_doc_content(
+                                doc_content_response,
+                                doc_name,
+                                last_sync_time
+                            )
+                else:
+                    # 处理文档内容并根据时间过滤
+                    documents += process_doc_content(
+                        doc_content_response,
+                        doc_name,
+                        last_sync_time
+                    )
 
                 if not documents:
                     logger.debug(f"文档 {doc_name} 没有需要同步的内容")
