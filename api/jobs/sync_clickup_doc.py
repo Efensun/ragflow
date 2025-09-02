@@ -575,7 +575,7 @@ def get_clickup_docs():
 
     for clickup_folder_id, ragflow_parent_id, ragflow_kb_id, folder_desc in folders:
 
-        documents = []
+
 
         logger.info(f"开始处理{folder_desc}...")
 
@@ -591,6 +591,8 @@ def get_clickup_docs():
         synced_docs_count = 0
 
         for page in pages:
+            documents = []
+
             try:
                 doc_name = page.get('name', 'unknown')
                 doc_id = page.get('id')
