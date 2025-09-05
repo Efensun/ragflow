@@ -17,6 +17,7 @@ from api.utils.file_utils import filename_type
 from rag.utils.storage_factory import STORAGE_IMPL
 import logging
 from api import settings
+from api.utils import timestamp_to_date
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -123,10 +124,10 @@ def get_doc_pages(doc_id):
         logger.error(f"获取文档内容失败 {doc_id}: {e}")
         return None
 
+
 def get_doc_by_page_listing(workspace_id, doc_id):
     """获取某个目录下所有子文档信息，但是不包括内容"""
     page_list_url = f"https://api.clickup.com/api/v3/workspaces/{workspace_id}/docs/{doc_id}/pageListing"
-
 
     headers = {
         "accept": "application/json",
@@ -156,14 +157,12 @@ def get_doc_content_by_page_id(workspace_id, doc_id, page_id):
         "Authorization": CLICKUP_TOKEN
     }
 
-
     res = requests.get(url, headers=headers)
     if res.status_code == 200:
         return res.json()
     else:
         logger.error(f"获取页面内容失败 {doc_id}: {res.text}")
         return None
-
 
 
 def should_sync_doc(doc_created_time, last_sync_time):
@@ -189,17 +188,25 @@ def should_sync_doc(doc_created_time, last_sync_time):
         return True
 
 
-def process_doc_content(doc_data, parent_name="", last_sync_time=None):
+def process_doc_content(doc_data, parent_name="", last_sync_time=None, hierarchy=None):
     """递归处理文档内容，提取需要同步的页面"""
     documents = []
     origin_url_prefix = "https://app.clickup.com"
 
-    def extract_content(doc, prefix=""):
+    if hierarchy is None:
+        hierarchy = []
+
+    def extract_content(doc, prefix="", current_path=None):
+        if current_path is None:
+            current_path = hierarchy.copy()
+
         doc_name = doc.get('name', '') or ''
         doc_content = doc.get('content', '')
         doc_created = doc.get('date_created')
         doc_updated = doc.get('date_updated')
         # 检查是否需要同步（基于创建时间或更新时间）
+
+        current_path.append(doc_name)
         should_sync = False
         if "测试报告" in doc_name:
             logger.info(f"跳过测试报告: {doc_name}")
@@ -225,12 +232,34 @@ def process_doc_content(doc_data, parent_name="", last_sync_time=None):
             if parent_name:
                 full_name = f"{parent_name}_{full_name}"
 
+            # 转换时间戳为可读格式，添加空值检查
+            created_readable = None
+            updated_readable = None
+            
+            if doc_created:
+                try:
+                    created_readable = timestamp_to_date(doc_created)
+                except Exception as e:
+                    logger.error(f"解析创建时间失败: {e}, doc_created: {doc_created}")
+            
+            if doc_updated:
+                try:
+                    updated_readable = timestamp_to_date(doc_updated)
+                except Exception as e:
+                    logger.error(f"解析更新时间失败: {e}, doc_updated: {doc_updated}")
+
             documents.append({
                 'name': full_name,
                 'content': doc_content,
                 'date_created': doc_created,
                 'date_updated': doc_updated,
-                'doc_id':doc.get('id')
+                'doc_id': doc.get('id'),
+                'meta_data': {
+                    'created_time': created_readable,
+                    'updated_time': updated_readable,
+                    'hierarchy': current_path.copy(),
+                    'origin_url': origin_url
+                }
             })
 
             logger.info(f"文档需要同步: {full_name}, 创建时间: {doc_created}")
@@ -240,7 +269,7 @@ def process_doc_content(doc_data, parent_name="", last_sync_time=None):
         # 处理子页面
         if doc.get('pages'):
             for page in doc['pages']:
-                extract_content(page, f"{doc_name}_" if doc_name else "")
+                extract_content(page, f"{doc_name}_" if doc_name else "", current_path.copy())
 
     if isinstance(doc_data, list):
         for doc in doc_data:
@@ -433,7 +462,7 @@ def update_existing_file(file_id, new_content, new_name=None):
         return False, str(e)
 
 
-def upload_doc_to_ragflow(doc_content, doc_name, parent_folder_id, kb_id, doc_id):
+def upload_doc_to_ragflow(doc_content, doc_name, parent_folder_id, kb_id, doc_info):
     """上传文档到RAGFlow文件服务的指定文件夹并绑定到知识库"""
     try:
         # 检查父文件夹ID和知识库ID是否设置
@@ -445,9 +474,18 @@ def upload_doc_to_ragflow(doc_content, doc_name, parent_folder_id, kb_id, doc_id
             logger.warning(f"知识库ID未设置，跳过上传文档: {doc_name}")
             return False, "知识库ID未设置"
 
+        meta_data = doc_info.get("meta_data",{})
+
+        meta_fields = {
+            "创建时间": meta_data.get('created_time'),
+            "更新时间": meta_data.get('updated_time'),
+            "文档层级信息": " > ".join(meta_data.get('hierarchy', [])),
+            "原文链接": meta_data.get('origin_url')
+        }
+
         # 准备文件名
         filename = f"{doc_name}.md"
-
+        doc_id = doc_info.get("doc_id")
         # 检查文件是否已存在
         existing_files = FileService.query(location=doc_id, parent_id=parent_folder_id)
 
@@ -459,7 +497,7 @@ def upload_doc_to_ragflow(doc_content, doc_name, parent_folder_id, kb_id, doc_id
             content_changed = compare_file_content(existing_file.id, doc_content)
 
             if not content_changed:
-                logger.info(f"文档 {filename} 内容未变化，跳过更新")
+                logger.info(f"文档 {filename} 内容未变化，更新元数据")
 
                 # 检查是否已绑定到指定知识库
                 existing_bindings = File2DocumentService.get_by_file_id(existing_file.id)
@@ -467,6 +505,9 @@ def upload_doc_to_ragflow(doc_content, doc_name, parent_folder_id, kb_id, doc_id
                 for binding in existing_bindings:
                     e, doc = DocumentService.get_by_id(binding.document_id)
                     if e and doc.kb_id == kb_id:
+                        # 更新元数据
+                        DocumentService.update_meta_fields(doc.id, meta_fields)
+                        logger.info(f"已更新文档元数据: {filename}")
                         is_bound_to_kb = True
                         break
 
@@ -474,11 +515,18 @@ def upload_doc_to_ragflow(doc_content, doc_name, parent_folder_id, kb_id, doc_id
                     # 如果未绑定到指定知识库，进行绑定
                     success, message = bind_file_to_kb(existing_file.id, kb_id)
                     if success:
-                        return True, "文档已存在，完成绑定"
+                        # 绑定成功后更新元数据
+                        bindings = File2DocumentService.get_by_file_id(existing_file.id)
+                        for binding in bindings:
+                            e, doc = DocumentService.get_by_id(binding.document_id)
+                            if e and doc.kb_id == kb_id:
+                                DocumentService.update_meta_fields(doc.id, meta_fields)
+                                break
+                        return True, "文档已存在，完成绑定和元数据更新"
                     else:
                         return False, f"文档已存在，绑定失败: {message}"
 
-                return True, "文档已存在且内容未变化"
+                return True, "文档已存在，元数据已更新"
 
             else:
                 logger.info(f"文档 {filename} 内容有变化，更新现有文档")
@@ -486,10 +534,17 @@ def upload_doc_to_ragflow(doc_content, doc_name, parent_folder_id, kb_id, doc_id
                 # 更新现有文件内容
                 success, message = update_existing_file(existing_file.id, doc_content, filename)
                 if success:
-                    # 确保绑定到知识库
+                    # 确保绑定到知识库并更新元数据
                     bind_success, bind_message = bind_file_to_kb(existing_file.id, kb_id)
                     if bind_success:
-                        return True, "文档内容已更新且已绑定"
+                        # 更新元数据
+                        bindings = File2DocumentService.get_by_file_id(existing_file.id)
+                        for binding in bindings:
+                            e, doc = DocumentService.get_by_id(binding.document_id)
+                            if e and doc.kb_id == kb_id:
+                                DocumentService.update_meta_fields(doc.id, meta_fields)
+                                break
+                        return True, "文档内容已更新，绑定和元数据已更新"
                     else:
                         return False, f"文档内容更新成功但绑定失败: {bind_message}"
                 else:
@@ -533,8 +588,15 @@ def upload_doc_to_ragflow(doc_content, doc_name, parent_folder_id, kb_id, doc_id
         # 绑定文件到知识库
         success, message = bind_file_to_kb(file_record.id, kb_id)
         if success:
+            bindings = File2DocumentService.get_by_file_id(file_record.id)
+            for binding in bindings:
+                e, doc = DocumentService.get_by_id(binding.document_id)
+                if e and doc.kb_id == kb_id:
+                    DocumentService.update_meta_fields(doc.id, meta_fields)
+                    logger.info(f"成功更新文档元数据: {filename}")
+                    break
             logger.info(f"成功将新文档绑定到知识库: {filename}")
-            return True, "新文档上传并绑定成功"
+            return True, "新文档上传,绑定和元数据添加成功"
         else:
             logger.error(f"新文档上传成功但绑定失败: {filename} - {message}")
             return False, f"上传成功但绑定失败: {message}"
@@ -575,8 +637,6 @@ def get_clickup_docs():
 
     for clickup_folder_id, ragflow_parent_id, ragflow_kb_id, folder_desc in folders:
 
-
-
         logger.info(f"开始处理{folder_desc}...")
 
         # 获取所有页面（不过滤时间）
@@ -603,6 +663,7 @@ def get_clickup_docs():
 
                 logger.debug(f"检查文档: {doc_name}, 创建时间: {page_created}")
 
+                initial_hierarchy = [folder_desc]
                 # 获取文档内容
                 doc_content_response = get_doc_pages(doc_id)
                 if not doc_content_response:
@@ -616,21 +677,23 @@ def get_clickup_docs():
                         page_id = doc.get('id')
                         doc_content_response = get_doc_pages(page_id)
                         if not doc_content_response:
-                            error_count+=1
+                            error_count += 1
                             logger.error(f"通过子页面获取文档内容失败: {doc_name}")
                             continue
                         if doc_content_response:
                             documents += process_doc_content(
                                 doc_content_response,
                                 doc_name,
-                                last_sync_time
+                                last_sync_time,
+                                initial_hierarchy
                             )
                 else:
                     # 处理文档内容并根据时间过滤
                     documents += process_doc_content(
                         doc_content_response,
                         doc_name,
-                        last_sync_time
+                        last_sync_time,
+                        initial_hierarchy
                     )
 
                 if not documents:
@@ -646,7 +709,7 @@ def get_clickup_docs():
                         doc['name'],
                         ragflow_parent_id,
                         ragflow_kb_id,
-                        doc['doc_id']
+                        doc
                     )
 
                     if success:
@@ -767,7 +830,6 @@ def start_index():
                     except Exception as e:
                         logger.error(f"处理文档 {doc.name} 时出错: {e}")
                         continue
-
 
                 logger.info(f"第 {current_batch} 批处理完成，成功: {batch_success_count}/{len(batch_docs)}")
 
