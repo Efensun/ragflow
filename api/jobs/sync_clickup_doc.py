@@ -235,13 +235,13 @@ def process_doc_content(doc_data, parent_name="", last_sync_time=None, hierarchy
             # 转换时间戳为可读格式，添加空值检查
             created_readable = None
             updated_readable = None
-            
+
             if doc_created:
                 try:
                     created_readable = timestamp_to_date(doc_created)
                 except Exception as e:
                     logger.error(f"解析创建时间失败: {e}, doc_created: {doc_created}")
-            
+
             if doc_updated:
                 try:
                     updated_readable = timestamp_to_date(doc_updated)
@@ -474,7 +474,7 @@ def upload_doc_to_ragflow(doc_content, doc_name, parent_folder_id, kb_id, doc_in
             logger.warning(f"知识库ID未设置，跳过上传文档: {doc_name}")
             return False, "知识库ID未设置"
 
-        meta_data = doc_info.get("meta_data",{})
+        meta_data = doc_info.get("meta_data", {})
 
         meta_fields = {
             "创建时间": meta_data.get('created_time'),
@@ -1056,6 +1056,63 @@ def clean_and_resync():
     return True
 
 
+def update_metadata_only_safe():
+    """安全地仅更新文档元数据，不触及文件内容和索引"""
+    logger.info("开始安全更新所有ClickUp文档的元数据...")
+
+    success_count = 0
+    error_count = 0
+
+    folders = [
+        (COINEX_WEB_FOLDER_ID, RAGFLOW_WEB_PARENT_FOLDER_ID, RAGFLOW_WEB_KB_ID, "Web文档"),
+        (COINEX_PRODUCT_FOLDER_ID, RAGFLOW_PRODUCT_PARENT_FOLDER_ID, RAGFLOW_PRODUCT_KB_ID, "产品文档")
+    ]
+
+    for clickup_folder_id, ragflow_parent_id, ragflow_kb_id, folder_desc in folders:
+        logger.info(f"开始更新{folder_desc}的元数据...")
+
+        # 直接从数据库中获取现有的ClickUp文档
+        clickup_docs = DocumentService.query(
+            kb_id=ragflow_kb_id,
+            source_type="clickup"
+        )
+
+        logger.info(f"找到 {len(clickup_docs)} 个{folder_desc}的ClickUp文档")
+
+        for doc in clickup_docs:
+            try:
+                # 通过文件名推断层级信息
+                # 假设文件名格式为：父级_子级_文档名.md
+                file_name = doc.name
+                if file_name.endswith('.md'):
+                    file_name = file_name[:-3]
+
+                # 解析层级信息
+                parts = file_name.split('_')
+                hierarchy_path = [folder_desc] + parts
+
+                # 构建元数据（使用现有的创建和更新时间）
+                meta_fields = {
+                    "创建时间": doc.meta_fields.get("创建时间") if doc.meta_fields else None,
+                    "更新时间": doc.meta_fields.get("更新时间") if doc.meta_fields else None,
+                    "文档层级信息": " > ".join(hierarchy_path)
+                }
+
+                # 只更新元数据，不触及文件内容
+                DocumentService.update_meta_fields(doc.id, meta_fields)
+                success_count += 1
+                logger.info(f"已更新文档元数据: {doc.name}")
+
+            except Exception as e:
+                error_count += 1
+                logger.error(f"更新文档元数据失败 {doc.name}: {e}")
+
+        logger.info(f"{folder_desc}元数据更新完成")
+
+    logger.info(f"安全元数据更新完成！成功: {success_count}, 失败: {error_count}")
+    return success_count, error_count
+
+
 def run():
     """通过schedule管理定时任务"""
     logger.info("启动ClickUp文档同步定时任务...")
@@ -1111,11 +1168,14 @@ if __name__ == "__main__":
             # 只同步新文档
             get_clickup_docs()
             start_index()
+        elif sys.argv[1] == "update-metadata":
+            update_metadata_only_safe()
         else:
             print("用法:")
             print("  python sync_clickup_doc.py clean          # 只清理文档")
             print("  python sync_clickup_doc.py clean-resync   # 清理并重新同步")
             print("  python sync_clickup_doc.py sync           # 只同步新文档")
+            print("  python sync_clickup_doc.py update-metadata    # 强制更新所有文档元数据")
             print("  python sync_clickup_doc.py                # 启动定时任务")
     else:
         # 默认启动定时任务
