@@ -581,9 +581,13 @@ def fetch_full_doc_from_storage(doc_id: str) -> str | None:
             
         return content
 
-    bucket, name = File2DocumentService.get_storage_address(doc_id=doc_id)
-
     try:
+        result = File2DocumentService.get_storage_address(doc_id=doc_id)
+        if result is None or result == (None, None):
+            logging.warning(f"Cannot get storage address for doc_id: {doc_id}")
+            return None
+        bucket, name = result
+        
         file_content_bytes = STORAGE_IMPL.get(bucket, name)
         if not file_content_bytes:
             return None

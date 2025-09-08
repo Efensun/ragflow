@@ -14,6 +14,7 @@
 #  limitations under the License.
 #
 from datetime import datetime
+import logging
 
 from api.db import FileSource
 from api.db.db_models import DB
@@ -78,4 +79,8 @@ class File2DocumentService(CommonService):
 
         assert doc_id, "please specify doc_id"
         e, doc = DocumentService.get_by_id(doc_id)
+        
+        if not e or doc is None:
+            logging.warning(f"Document not found for doc_id: {doc_id}")
+            return None, None
         return doc.kb_id, doc.location
